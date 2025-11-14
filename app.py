@@ -11,12 +11,16 @@ CORS(app)
 TELEGRAM_API_TOKEN = '8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8'
 CHAT_ID = '-1003174496663'
 
-def send_to_telegram(message):
+def send_to_telegram(message, photo_url=None):
     try:
         # Tạo URL API Telegram
-        url = f"https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": message}
-        
+        if photo_url:
+            url = f"https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendPhoto"
+            payload = {"chat_id": CHAT_ID, "photo": photo_url, "caption": message}
+        else:
+            url = f"https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendMessage"
+            payload = {"chat_id": CHAT_ID, "text": message}
+
         # Gửi yêu cầu POST đến Telegram
         response = requests.post(url, data=payload)
         
@@ -59,8 +63,8 @@ def webhook():
             continue
 
         # Tạo message từ tweet và gửi Telegram
-        message = format_tweet_message(t)
-        send_res = send_to_telegram(message)
+        message, photo_url = format_tweet_message(t)
+        send_res = send_to_telegram(message, photo_url)  # Gửi thông điệp và ảnh (nếu có)
 
         # Lưu kết quả gửi tin nhắn và thông tin tweet
         results.append({
@@ -94,6 +98,12 @@ def format_tweet_message(tweet):
     tweet_id = tweet.get("id", "")
     link = f"https://twitter.com/{user}/status/{tweet_id}"
 
+    # Lấy URL ảnh từ tweet (nếu có)
+    photo_url = None
+    media = tweet.get("media", [])
+    if media:
+        photo_url = media[0].get("media_url", None)  # Giả sử ảnh đầu tiên trong media
+    
     # Kiểm tra nếu tweet là bài post hay comment
     if tweet.get("inReplyToStatusId"):
         message_type = "Bình luận"
@@ -116,11 +126,8 @@ Link: {link}
 
 --------------------------------------------
 
-X (formerly Twitter)
-{user} (@{user}) on X
-{text}
-"""
-    return message
+
+    return message, photo_url
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

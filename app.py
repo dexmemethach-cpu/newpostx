@@ -51,7 +51,7 @@ def webhook():
             link = f"https://twitter.com/{user}/status/{tweet_id}"  # Tạo liên kết tweet
 
             # In thông tin tweet để kiểm tra
-            print(f"Sending tweet from {user}: {text} ({link})")
+            print(f"Sending tweet from @{user}: {text} ({link})")
 
             # Tạo thông báo để gửi vào Telegram
             status_message = f"Tweet mới từ @{user}:\n{text}\nLink: {link}"

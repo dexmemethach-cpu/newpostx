@@ -24,11 +24,12 @@ def send_to_telegram(message):
         response.raise_for_status()
 
         # In phản hồi từ Telegram để kiểm tra
-        print("Response from Telegram:", response.json())
-
+        return {"ok": True, "response": response.json()}
+    
     except requests.exceptions.RequestException as e:
         # Nếu có lỗi khi gửi yêu cầu, in lỗi ra console
         print(f"Error sending message to Telegram: {e}")
+        return {"ok": False, "error": str(e)}
 
 @app.route('/')
 def home():
@@ -37,42 +38,61 @@ def home():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     # Nhận dữ liệu từ Webhook
-    data = request.get_json()
+    data = request.get_json(silent=True)
     print(f"Received data: {data}")
 
     # Kiểm tra dữ liệu có đúng không
-    if data and 'tweets' in data:
-        tweet = data['tweets'][0]  # Lấy tweet đầu tiên nếu có
-        # Kiểm tra đầy đủ thông tin tweet
-        if 'user' in tweet and 'username' in tweet['user'] and 'text' in tweet and 'id' in tweet:
-            user = tweet['user']['username']  # Trích xuất tên người dùng
-            text = tweet['text']  # Nội dung tweet
-            tweet_id = tweet['id']  # ID của tweet
-            link = f"https://twitter.com/{user}/status/{tweet_id}"  # Tạo liên kết tweet
+    if not data:
+        return jsonify({"status": "bad_request", "error": "Invalid or empty JSON body"}), 400
 
-            # In thông tin tweet để kiểm tra
-            print(f"Sending tweet from @{user}: {text} ({link})")
+    # Kiểm tra trường 'tweets' có phải là mảng không và không rỗng
+    tweets = data.get("tweets")
+    if not isinstance(tweets, list) or len(tweets) == 0:
+        return jsonify({"status": "bad_request", "error": "Missing or empty 'tweets' array"}), 400
 
-            # Tạo thông báo để gửi vào Telegram
-            status_message = f"Tweet mới từ @{user}:\n{text}\nLink: {link}"
+    results = []
+    for t in tweets:
+        # Kiểm tra xem mỗi tweet có phải là dict và có trường 'id'
+        if not isinstance(t, dict) or not t.get("id"):
+            results.append({"ok": False, "error": "invalid_tweet_object"})
+            continue
+        
+        # Tạo message từ tweet và gửi Telegram
+        message = format_tweet_message(t)
+        send_res = send_to_telegram(message)
 
-            # Gửi thông báo đến Telegram
-            send_to_telegram(status_message)
-        else:
-            # In chi tiết lỗi khi thiếu thông tin
-            print("Tweet không có đầy đủ thông tin cần thiết, kiểm tra lại cấu trúc dữ liệu.")
-            print(f"Missing data in tweet: {tweet}")
-    else:
-        # Trường hợp không nhận được tweet trong dữ liệu
-        print("Không có tweet trong dữ liệu.")
+        # Lưu kết quả gửi tin nhắn và thông tin tweet
+        results.append({
+            "tweet": {
+                "id": str(t.get("id")),
+                "text": t.get("text", ""),
+                "author": (t.get("author") or {}).get("userName"),
+                "url": t.get("twitterUrl") or t.get("url")
+            },
+            "telegram": send_res
+        })
 
-    # Trả về phản hồi JSON
-    response_data = {
-        "status": "ok",
-        "tweet": data.get("tweets")
+    # Kiểm tra tất cả kết quả gửi Telegram
+    overall_ok = all(item.get("telegram", {}).get("ok") for item in results if isinstance(item, dict))
+    
+    # Tạo phản hồi tổng thể
+    response = {
+        "status": "ok" if overall_ok else "partial_ok",
+        "event_type": data.get("event_type"),
+        "timestamp": data.get("timestamp"),
+        "results": results
     }
 
-    return jsonify(response_data), 200  # Trả về file JSON
+    # Trả về mã 200 nếu tất cả gửi thành công, 207 nếu có lỗi
+    return jsonify(response), 200 if overall_ok else 207
+
+# Hàm format message từ tweet (có thể tùy chỉnh theo yêu cầu)
+def format_tweet_message(tweet):
+    user = tweet.get("author", {}).get("userName", "Unknown User")
+    text = tweet.get("text", "")
+    tweet_id = tweet.get("id", "")
+    link = f"https://twitter.com/{user}/status/{tweet_id}"
+    return f"Tweet mới từ @{user}:\n{text}\nLink: {link}"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

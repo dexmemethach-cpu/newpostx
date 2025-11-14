@@ -126,7 +126,10 @@ Link: {link}
 
 --------------------------------------------
 
-
+X (formerly Twitter)
+{user} (@{user}) on X
+{text}
+"""
     return message, photo_url
 
 if __name__ == '__main__':

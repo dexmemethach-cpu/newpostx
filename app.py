@@ -36,18 +36,24 @@ def webhook():
     data = request.get_json()
     print(f"Received tweet: {data}")
 
-    # Nếu có tweet mới
-    if data and data.get("tweet"):
-        user = data["tweet"]["user"]
-        text = data["tweet"]["text"]
-        tweet_id = data["tweet"]["id"]
-        link = f"https://twitter.com/{user}/status/{tweet_id}"
+    # Kiểm tra xem dữ liệu có tweet không
+    if data and 'tweet' in data:
+        tweet = data['tweet']
+        user = tweet['user']
+        text = tweet['text']
+        tweet_id = tweet['id']
+        username = user['username']
+        
+        # Tạo liên kết tweet
+        link = f"https://twitter.com/{username}/status/{tweet_id}"
 
-        # Tạo thông báo và gửi vào Telegram
-        status_message = f"Tweet mới từ {user}:\n{text}\n{link}"
+        # Tạo thông báo để gửi vào Telegram
+        status_message = f"Tweet mới từ {username}:\n{text}\nLink: {link}"
+        
+        # Gửi thông báo đến Telegram
         send_to_telegram(status_message)
 
-    # Trả về dữ liệu JSON
+    # Trả về phản hồi JSON
     response_data = {
         "status": "ok",
         "tweet": data.get("tweet")

@@ -43,6 +43,7 @@ def webhook():
     # Kiểm tra dữ liệu có đúng không
     if data and 'tweets' in data:
         tweet = data['tweets'][0]  # Lấy tweet đầu tiên nếu có
+        # Kiểm tra đầy đủ thông tin tweet
         if 'user' in tweet and 'username' in tweet['user'] and 'text' in tweet and 'id' in tweet:
             user = tweet['user']['username']  # Trích xuất tên người dùng
             text = tweet['text']  # Nội dung tweet
@@ -58,7 +59,8 @@ def webhook():
             # Gửi thông báo đến Telegram
             send_to_telegram(status_message)
         else:
-            print("Tweet không có đầy đủ thông tin cần thiết.")
+            print("Tweet không có đầy đủ thông tin cần thiết, kiểm tra lại cấu trúc dữ liệu.")
+            print(f"Missing data: {tweet}")
     else:
         print("Không có tweet trong dữ liệu.")
 

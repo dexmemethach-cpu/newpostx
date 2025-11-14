@@ -59,9 +59,11 @@ def webhook():
             # Gửi thông báo đến Telegram
             send_to_telegram(status_message)
         else:
+            # In chi tiết lỗi khi thiếu thông tin
             print("Tweet không có đầy đủ thông tin cần thiết, kiểm tra lại cấu trúc dữ liệu.")
-            print(f"Missing data: {tweet}")
+            print(f"Missing data in tweet: {tweet}")
     else:
+        # Trường hợp không nhận được tweet trong dữ liệu
         print("Không có tweet trong dữ liệu.")
 
     # Trả về phản hồi JSON

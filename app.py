@@ -11,11 +11,11 @@ CORS(app)
 TELEGRAM_API_TOKEN = '8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8'
 CHAT_ID = '-1003174496663'
 
-def send_to_telegram(message, status="Success"):
+def send_to_telegram(message):
     try:
         # Tạo URL API Telegram
         url = f"https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": f"Status: {status}\n{message}"}
+        payload = {"chat_id": CHAT_ID, "text": message}
         
         # Gửi yêu cầu POST đến Telegram
         response = requests.post(url, data=payload)
@@ -43,9 +43,9 @@ def webhook():
         tweet_id = data["tweet"]["id"]
         link = f"https://twitter.com/{user}/status/{tweet_id}"
 
-        # Gửi thông báo vào Telegram
+        # Tạo thông báo và gửi vào Telegram
         status_message = f"Tweet mới từ {user}:\n{text}\n{link}"
-        send_to_telegram(status_message, status="Tweet Received")
+        send_to_telegram(status_message)
 
     # Trả về dữ liệu JSON
     response_data = {

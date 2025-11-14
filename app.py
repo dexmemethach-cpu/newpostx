@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS  # Import Flask-CORS
+from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
@@ -22,6 +22,10 @@ def send_to_telegram(message):
         
         # Kiểm tra xem có lỗi trong quá trình gửi tin nhắn không
         response.raise_for_status()
+
+        # In phản hồi từ Telegram để kiểm tra
+        print("Response from Telegram:", response.json())
+
     except requests.exceptions.RequestException as e:
         # Nếu có lỗi khi gửi yêu cầu, in lỗi ra console
         print(f"Error sending message to Telegram: {e}")
@@ -34,29 +38,31 @@ def home():
 def webhook():
     # Nhận dữ liệu từ Webhook
     data = request.get_json()
-    print(f"Received tweet: {data}")
+    print(f"Received data: {data}")
 
-    # Kiểm tra xem dữ liệu có tweet không
-    if data and 'tweet' in data:
-        tweet = data['tweet']
-        user = tweet['user']
-        text = tweet['text']
-        tweet_id = tweet['id']
-        username = user['username']
-        
-        # Tạo liên kết tweet
-        link = f"https://twitter.com/{username}/status/{tweet_id}"
+    # Kiểm tra dữ liệu có đúng không
+    if data and 'tweets' in data:
+        tweet = data['tweets'][0]  # Lấy tweet đầu tiên nếu có
+        if 'user' in tweet and 'username' in tweet['user'] and 'text' in tweet and 'id' in tweet:
+            user = tweet['user']['username']  # Trích xuất tên người dùng
+            text = tweet['text']  # Nội dung tweet
+            tweet_id = tweet['id']  # ID của tweet
+            link = f"https://twitter.com/{user}/status/{tweet_id}"  # Tạo liên kết tweet
 
-        # Tạo thông báo để gửi vào Telegram
-        status_message = f"Tweet mới từ {username}:\n{text}\nLink: {link}"
-        
-        # Gửi thông báo đến Telegram
-        send_to_telegram(status_message)
+            # Tạo thông báo để gửi vào Telegram
+            status_message = f"Tweet mới từ @{user}:\n{text}\nLink: {link}"
+
+            # Gửi thông báo đến Telegram
+            send_to_telegram(status_message)
+        else:
+            print("Tweet không có đầy đủ thông tin cần thiết.")
+    else:
+        print("Không có tweet trong dữ liệu.")
 
     # Trả về phản hồi JSON
     response_data = {
         "status": "ok",
-        "tweet": data.get("tweet")
+        "tweet": data.get("tweets")
     }
 
     return jsonify(response_data), 200  # Trả về file JSON

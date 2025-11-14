@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
+import re
 
 app = Flask(__name__)
 
@@ -103,6 +104,7 @@ def format_tweet_message(tweet):
     photo_url = None
     media = tweet.get("media", [])
     if media:
+        # Lấy ảnh URL từ trường media
         photo_url = media[0].get("media_url", None)  # Giả sử ảnh đầu tiên trong media
     
     # Kiểm tra nếu tweet là bài post hay comment

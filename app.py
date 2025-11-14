@@ -1,8 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
-import json
-import datetime
+import re
 
 app = Flask(__name__)
 
@@ -12,68 +11,7 @@ CORS(app)
 # Thông tin Telegram bot
 TELEGRAM_API_TOKEN = '8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8'
 CHAT_ID = '-1003174496663'
-WEBHOOK_URL = f'https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/'
 
-# Đường dẫn tệp lưu trữ số bài post mỗi ngày
-POST_COUNT_FILE = 'post_count.json'
-
-# Cấu hình các endpoint Telegram
-@app.route('/telegram_webhook', methods=['POST'])
-def telegram_webhook():
-    update = request.get_json()
-    print(f"Received update: {update}")
-
-    # Kiểm tra xem có lệnh nào trong tin nhắn không
-    if 'message' in update:
-        message = update['message']
-        text = message.get('text', '')
-        chat_id = message['chat']['id']
-
-        # Nếu nhận được lệnh /posttoday
-        if text == "/posttoday":
-            # Lấy số bài post trong ngày (sử dụng hàm từ app.py để lấy số lượng bài post)
-            count = get_post_count()  # Đảm bảo rằng bạn đã có hàm get_post_count() từ app.py
-            response_message = f"Số bài post trong ngày hôm nay: {count}"
-            send_telegram_message(chat_id, response_message)
-
-        # Trả lời tin nhắn bất kỳ
-        else:
-            response_message = "Lệnh không hợp lệ! Vui lòng thử lại."
-            send_telegram_message(chat_id, response_message)
-
-    return jsonify({"status": "ok"}), 200
-
-def send_telegram_message(chat_id, message):
-    url = f"{WEBHOOK_URL}sendMessage"
-    payload = {"chat_id": chat_id, "text": message}
-    requests.post(url, data=payload)
-
-# Kiểm tra số lượng bài post trong ngày
-def get_post_count():
-    try:
-        with open(POST_COUNT_FILE, 'r') as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        data = {}
-    
-    today = datetime.date.today().isoformat()
-    return data.get(today, 0)
-
-# Cập nhật số bài post
-def update_post_count():
-    try:
-        with open(POST_COUNT_FILE, 'r') as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        data = {}
-    
-    today = datetime.date.today().isoformat()
-    data[today] = data.get(today, 0) + 1
-
-    with open(POST_COUNT_FILE, 'w') as f:
-        json.dump(data, f)
-
-# Hàm gửi tin nhắn đến Telegram
 def send_to_telegram(message, photo_url=None):
     try:
         # Nếu có ảnh, gửi ảnh qua API sendPhoto
@@ -100,30 +38,37 @@ def send_to_telegram(message, photo_url=None):
         print(f"Error sending message to Telegram: {e}")
         return {"ok": False, "error": str(e)}
 
-# Webhook xử lý bài post
+@app.route('/')
+def home():
+    return "✅ Twitter Webhook is running!", 200
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     # Nhận dữ liệu từ Webhook
     data = request.get_json(silent=True)
     print(f"Received data: {data}")
 
+    # Kiểm tra dữ liệu có đúng không
     if not data:
         return jsonify({"status": "bad_request", "error": "Invalid or empty JSON body"}), 400
 
+    # Kiểm tra trường 'tweets' có phải là mảng không và không rỗng
     tweets = data.get("tweets")
     if not isinstance(tweets, list) or len(tweets) == 0:
         return jsonify({"status": "bad_request", "error": "Missing or empty 'tweets' array"}), 400
 
     results = []
     for t in tweets:
+        # Kiểm tra xem mỗi tweet có phải là dict và có trường 'id'
         if not isinstance(t, dict) or not t.get("id"):
             results.append({"ok": False, "error": "invalid_tweet_object"})
             continue
 
         # Tạo message từ tweet và gửi Telegram
         message, photo_url = format_tweet_message(t)
-        send_res = send_to_telegram(message, photo_url)
+        send_res = send_to_telegram(message, photo_url)  # Gửi thông điệp và ảnh (nếu có)
 
+        # Lưu kết quả gửi tin nhắn và thông tin tweet
         results.append({
             "tweet": {
                 "id": str(t.get("id")),
@@ -134,8 +79,10 @@ def webhook():
             "telegram": send_res
         })
 
+    # Kiểm tra tất cả kết quả gửi Telegram
     overall_ok = all(item.get("telegram", {}).get("ok") for item in results if isinstance(item, dict))
     
+    # Tạo phản hồi tổng thể
     response = {
         "status": "ok" if overall_ok else "partial_ok",
         "event_type": data.get("event_type"),
@@ -143,6 +90,7 @@ def webhook():
         "results": results
     }
 
+    # Trả về mã 200 nếu tất cả gửi thành công, 207 nếu có lỗi
     return jsonify(response), 200 if overall_ok else 207
 
 # Hàm format message từ tweet (có thể tùy chỉnh theo yêu cầu)
@@ -156,6 +104,7 @@ def format_tweet_message(tweet):
     photo_url = None
     media = tweet.get("media", [])
     if media:
+        # Lấy ảnh URL từ trường media
         photo_url = media[0].get("media_url", None)  # Giả sử ảnh đầu tiên trong media
     
     # Kiểm tra nếu tweet là bài post hay comment

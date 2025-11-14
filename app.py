@@ -13,11 +13,12 @@ CHAT_ID = '-1003174496663'
 
 def send_to_telegram(message, photo_url=None):
     try:
-        # Tạo URL API Telegram
+        # Nếu có ảnh, gửi ảnh qua API sendPhoto
         if photo_url:
             url = f"https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendPhoto"
             payload = {"chat_id": CHAT_ID, "photo": photo_url, "caption": message}
         else:
+            # Nếu không có ảnh, gửi tin nhắn văn bản
             url = f"https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendMessage"
             payload = {"chat_id": CHAT_ID, "text": message}
 

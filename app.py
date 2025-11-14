@@ -24,6 +24,7 @@ def send_to_telegram(message):
         response.raise_for_status()
 
         # In phản hồi từ Telegram để kiểm tra
+        print("Response from Telegram:", response.json())
         return {"ok": True, "response": response.json()}
     
     except requests.exceptions.RequestException as e:
@@ -56,7 +57,7 @@ def webhook():
         if not isinstance(t, dict) or not t.get("id"):
             results.append({"ok": False, "error": "invalid_tweet_object"})
             continue
-        
+
         # Tạo message từ tweet và gửi Telegram
         message = format_tweet_message(t)
         send_res = send_to_telegram(message)
@@ -92,7 +93,34 @@ def format_tweet_message(tweet):
     text = tweet.get("text", "")
     tweet_id = tweet.get("id", "")
     link = f"https://twitter.com/{user}/status/{tweet_id}"
-    return f"Tweet mới từ @{user}:\n{text}\nLink: {link}"
+
+    # Kiểm tra nếu tweet là bài post hay comment
+    if tweet.get("inReplyToStatusId"):
+        message_type = "Bình luận"
+        original_tweet_id = tweet.get("inReplyToStatusId")
+        original_tweet_link = f"https://twitter.com/{user}/status/{original_tweet_id}"
+        reply_to = f"Trả lời tweet: {original_tweet_link}"
+    else:
+        message_type = "Bài post"
+        reply_to = "Không phải bình luận, là bài post gốc."
+
+    # Định dạng lại thông điệp với thông tin bài post hoặc comment
+    message = f"""
+{message_type} từ @{user}:
+
+{text}
+
+Link: {link}
+
+{reply_to}
+
+--------------------------------------------
+
+X (formerly Twitter)
+{user} (@{user}) on X
+{text}
+"""
+    return message
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

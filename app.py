@@ -13,11 +13,62 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Cấu hình Telegram
-TELEGRAM_BOT_TOKEN = "8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8"
-TELEGRAM_CHAT_ID = "-1003174496663"
+TELEGRAM_BOT_TOKEN = "8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8"  # Thay bằng token thật
+TELEGRAM_CHAT_ID = "-1003174496663"      # Thay bằng chat ID thật
+
+def extract_media_urls(tweet):
+    """Trích xuất URL hình ảnh/video từ tweet"""
+    media_urls = []
+    
+    try:
+        # Kiểm tra extendedEntities trước (chứa media chất lượng cao)
+        extended_entities = tweet.get('extendedEntities', {})
+        if extended_entities and 'media' in extended_entities:
+            for media in extended_entities['media']:
+                if media.get('type') == 'photo':
+                    media_url = media.get('media_url_https') or media.get('url')
+                    if media_url:
+                        media_urls.append(media_url)
+                        logger.info(f"  📷 Tìm thấy ảnh: {media_url}")
+        
+        # Nếu không có trong extendedEntities, kiểm tra entities
+        if not media_urls:
+            entities = tweet.get('entities', {})
+            if entities and 'media' in entities:
+                for media in entities['media']:
+                    if media.get('type') == 'photo':
+                        media_url = media.get('media_url_https') or media.get('url')
+                        if media_url:
+                            media_urls.append(media_url)
+                            logger.info(f"  📷 Tìm thấy ảnh: {media_url}")
+        
+        logger.info(f"  📊 Tổng số ảnh tìm thấy: {len(media_urls)}")
+        
+    except Exception as e:
+        logger.error(f"❌ Lỗi khi trích xuất media: {str(e)}")
+    
+    return media_urls
+
+def send_telegram_photo(photo_url, caption):
+    """Gửi ảnh kèm caption đến Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "photo": photo_url,
+            "caption": caption,
+            "parse_mode": "HTML"
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        logger.info(f"✅ Đã gửi ảnh Telegram thành công")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Lỗi khi gửi ảnh Telegram: {str(e)}")
+        return False
 
 def send_telegram_message(message):
-    """Gửi tin nhắn đến Telegram"""
+    """Gửi tin nhắn text đến Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
@@ -49,6 +100,9 @@ def extract_tweet_data(tweet):
         author_username = author.get('userName', 'Unknown')
         author_followers = author.get('followers', 0)
         
+        # Trích xuất media URLs
+        media_urls = extract_media_urls(tweet)
+        
         # Log chi tiết dữ liệu đã trích xuất
         logger.info(f"📊 Dữ liệu trích xuất:")
         logger.info(f"  - Tweet ID: {tweet_id}")
@@ -57,6 +111,7 @@ def extract_tweet_data(tweet):
         logger.info(f"  - Followers: {author_followers}")
         logger.info(f"  - Is Reply: {is_reply}")
         logger.info(f"  - URL: {tweet_url}")
+        logger.info(f"  - Media count: {len(media_urls)}")
         
         return {
             'id': tweet_id,
@@ -65,18 +120,42 @@ def extract_tweet_data(tweet):
             'is_reply': is_reply,
             'author_name': author_name,
             'author_username': author_username,
-            'author_followers': author_followers
+            'author_followers': author_followers,
+            'media_urls': media_urls
         }
     except Exception as e:
         logger.error(f"❌ Lỗi khi trích xuất dữ liệu tweet: {str(e)}")
         return None
 
-def format_telegram_message(tweet_data):
-    """Định dạng tin nhắn Telegram từ dữ liệu tweet"""
+def format_telegram_caption(tweet_data):
+    """Định dạng caption cho ảnh Telegram"""
     reply_indicator = "💬 Reply" if tweet_data['is_reply'] else "🐦 Tweet"
     
-    message = f"""
-🔔 <b>Tweet Mới từ X</b>
+    # Loại bỏ t.co links khỏi text
+    text = tweet_data['text']
+    import re
+    text = re.sub(r'https://t\.co/\w+', '', text).strip()
+    
+    caption = f"""🔔 <b>Tweet Mới từ X</b>
+
+{reply_indicator}
+👤 <b>{tweet_data['author_name']}</b> (@{tweet_data['author_username']})
+👥 Followers: {tweet_data['author_followers']:,}
+
+📝 <b>Nội dung:</b>
+{text}
+
+🔗 <a href="{tweet_data['url']}">Xem tweet gốc</a>
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+    
+    return caption.strip()
+
+def format_telegram_message(tweet_data):
+    """Định dạng tin nhắn Telegram từ dữ liệu tweet (không có ảnh)"""
+    reply_indicator = "💬 Reply" if tweet_data['is_reply'] else "🐦 Tweet"
+    
+    message = f"""🔔 <b>Tweet Mới từ X</b>
 
 {reply_indicator}
 👤 <b>{tweet_data['author_name']}</b> (@{tweet_data['author_username']})
@@ -87,8 +166,8 @@ def format_telegram_message(tweet_data):
 
 🔗 <a href="{tweet_data['url']}">Xem tweet gốc</a>
 
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+    
     return message.strip()
 
 @app.route('/webhook', methods=['POST'])
@@ -146,16 +225,39 @@ def webhook():
                 failed_count += 1
                 continue
             
-            # Định dạng và gửi tin nhắn Telegram
-            telegram_message = format_telegram_message(tweet_data)
-            logger.info(f"📤 Tin nhắn Telegram sẽ gửi:\n{telegram_message}")
-            
-            if send_telegram_message(telegram_message):
-                processed_count += 1
-                logger.info(f"✅ Đã xử lý thành công tweet {index}")
+            # Kiểm tra xem có ảnh không
+            if tweet_data['media_urls']:
+                # Có ảnh - gửi ảnh kèm caption
+                logger.info(f"📸 Tweet có {len(tweet_data['media_urls'])} ảnh")
+                caption = format_telegram_caption(tweet_data)
+                
+                # Gửi ảnh đầu tiên (Telegram hỗ trợ tốt nhất với 1 ảnh)
+                first_photo = tweet_data['media_urls'][0]
+                logger.info(f"📤 Gửi ảnh với caption:\n{caption}")
+                
+                if send_telegram_photo(first_photo, caption):
+                    processed_count += 1
+                    logger.info(f"✅ Đã xử lý thành công tweet {index} (có ảnh)")
+                else:
+                    # Nếu gửi ảnh thất bại, thử gửi text
+                    logger.warning(f"⚠️ Gửi ảnh thất bại, thử gửi text...")
+                    message = format_telegram_message(tweet_data)
+                    if send_telegram_message(message):
+                        processed_count += 1
+                    else:
+                        failed_count += 1
             else:
-                failed_count += 1
-                logger.error(f"❌ Không thể gửi Telegram cho tweet {index}")
+                # Không có ảnh - gửi text thông thường
+                logger.info(f"📝 Tweet không có ảnh")
+                message = format_telegram_message(tweet_data)
+                logger.info(f"📤 Tin nhắn Telegram sẽ gửi:\n{message}")
+                
+                if send_telegram_message(message):
+                    processed_count += 1
+                    logger.info(f"✅ Đã xử lý thành công tweet {index}")
+                else:
+                    failed_count += 1
+                    logger.error(f"❌ Không thể gửi Telegram cho tweet {index}")
         
         # Tổng kết
         logger.info("=" * 60)
@@ -189,7 +291,7 @@ def health():
     }), 200
 
 if __name__ == '__main__':
-    logger.info("🚀 Khởi động Twitter Webhook Server (Fixed v2)")
+    logger.info("🚀 Khởi động Twitter Webhook Server (Fixed v3 - With Images)")
     logger.info("📡 Endpoint: /webhook (POST)")
     logger.info("🏥 Health check: /health (GET)")
     app.run(host='0.0.0.0', port=5000, debug=True)

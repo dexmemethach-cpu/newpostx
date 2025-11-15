@@ -22,6 +22,7 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 def detect_community_post(tweet_data):
     """
     Phát hiện xem tweet có phải từ Twitter Community không
+    Tối ưu cho twitterapi.io
     
     Returns:
         dict: {'is_community': bool, 'community_name': str, 'community_id': str}
@@ -33,62 +34,113 @@ def detect_community_post(tweet_data):
     }
     
     try:
-        # LOG TOÀN BỘ TWEET DATA ĐỂ DEBUG
-        logger.info(f"🔍 DEBUG - Tweet keys: {list(tweet_data.keys())}")
-        logger.info(f"🔍 DEBUG - Full tweet data: {json.dumps(tweet_data, indent=2, ensure_ascii=False)}")
+        # LOG tất cả các trường để tìm community
+        logger.info(f"🔍 Checking for community in tweet...")
         
-        # Kiểm tra trong tweet object trực tiếp
-        if 'community_id' in tweet_data or 'communityId' in tweet_data:
-            community_info['is_community'] = True
-            community_info['community_id'] = tweet_data.get('community_id') or tweet_data.get('communityId')
-            logger.info(f"✅ Community post detected - ID: {community_info['community_id']}")
-        
-        # Kiểm tra trong community object
-        if 'community' in tweet_data:
-            community_info['is_community'] = True
-            community = tweet_data['community']
-            community_info['community_id'] = community.get('id') or community.get('id_str')
-            community_info['community_name'] = community.get('name')
-            logger.info(f"✅ Community post detected - Name: {community.get('name')}, ID: {community.get('id')}")
-        
-        # Kiểm tra trong conversation_context
-        if 'conversation_context' in tweet_data or 'conversationContext' in tweet_data:
-            conv_context = tweet_data.get('conversation_context') or tweet_data.get('conversationContext')
-            logger.info(f"🔍 Found conversation_context: {json.dumps(conv_context, indent=2, ensure_ascii=False)}")
-            if 'community' in conv_context:
-                community_info['is_community'] = True
-                community = conv_context['community']
-                community_info['community_id'] = community.get('id') or community.get('id_str')
-                community_info['community_name'] = community.get('name')
-                logger.info(f"✅ Community post detected in conversation_context - Name: {community.get('name')}")
-        
-        # Kiểm tra trong context_annotations
-        if 'context_annotations' in tweet_data or 'contextAnnotations' in tweet_data:
-            annotations = tweet_data.get('context_annotations') or tweet_data.get('contextAnnotations', [])
-            logger.info(f"🔍 Found context_annotations: {json.dumps(annotations, indent=2, ensure_ascii=False)}")
-            for annotation in annotations:
-                domain = annotation.get('domain', {})
-                if domain.get('name') == 'Community':
-                    community_info['is_community'] = True
-                    entity = annotation.get('entity', {})
-                    community_info['community_name'] = entity.get('name')
-                    logger.info(f"✅ Community post detected in context_annotations - Name: {entity.get('name')}")
-        
-        # Kiểm tra các trường khác có thể chứa thông tin community
-        possible_community_fields = [
-            'communityNote', 'community_note', 'communityNotes', 'community_notes',
-            'communityData', 'community_data', 'communityInfo', 'community_info',
-            'card', 'cards', 'supplemental_language'
+        # 1. Kiểm tra trực tiếp các trường community
+        community_fields = [
+            'community', 'communityId', 'community_id', 
+            'communityName', 'community_name', 'communityData', 'community_data'
         ]
         
-        for field in possible_community_fields:
-            if field in tweet_data:
-                logger.info(f"🔍 Found potential community field '{field}': {json.dumps(tweet_data[field], indent=2, ensure_ascii=False)}")
+        for field in community_fields:
+            if field in tweet_data and tweet_data[field]:
+                logger.info(f"✅ Found community field: {field} = {tweet_data[field]}")
+                
+                if isinstance(tweet_data[field], dict):
+                    community_info['is_community'] = True
+                    community_info['community_id'] = tweet_data[field].get('id') or tweet_data[field].get('id_str')
+                    community_info['community_name'] = tweet_data[field].get('name')
+                elif isinstance(tweet_data[field], str):
+                    community_info['is_community'] = True
+                    community_info['community_id'] = tweet_data[field]
         
+        # 2. Kiểm tra trong conversation_context
+        conv_context = tweet_data.get('conversation_context') or tweet_data.get('conversationContext')
+        if conv_context:
+            logger.info(f"🔍 Found conversation_context")
+            if isinstance(conv_context, dict) and 'community' in conv_context:
+                community_info['is_community'] = True
+                community = conv_context['community']
+                if isinstance(community, dict):
+                    community_info['community_id'] = community.get('id') or community.get('id_str')
+                    community_info['community_name'] = community.get('name')
+                    logger.info(f"✅ Community in conversation_context: {community_info['community_name']}")
+        
+        # 3. Kiểm tra trong context_annotations
+        annotations = tweet_data.get('context_annotations') or tweet_data.get('contextAnnotations', [])
+        if annotations:
+            logger.info(f"🔍 Found {len(annotations)} context_annotations")
+            for annotation in annotations:
+                domain = annotation.get('domain', {})
+                entity = annotation.get('entity', {})
+                
+                # Log để debug
+                logger.info(f"  - Domain: {domain.get('name')} (id: {domain.get('id')})")
+                logger.info(f"  - Entity: {entity.get('name')} (id: {entity.get('id')})")
+                
+                # Kiểm tra domain là Community
+                if domain.get('name') == 'Community' or domain.get('id') == '150':
+                    community_info['is_community'] = True
+                    community_info['community_name'] = entity.get('name')
+                    community_info['community_id'] = entity.get('id')
+                    logger.info(f"✅ Community in context_annotations: {community_info['community_name']}")
+        
+        # 4. Kiểm tra trong card (một số API trả về community trong card)
+        card = tweet_data.get('card')
+        if card and isinstance(card, dict):
+            logger.info(f"🔍 Found card data")
+            if 'community' in card:
+                community_info['is_community'] = True
+                community = card['community']
+                if isinstance(community, dict):
+                    community_info['community_id'] = community.get('id')
+                    community_info['community_name'] = community.get('name')
+                    logger.info(f"✅ Community in card: {community_info['community_name']}")
+        
+        # 5. Kiểm tra trong place (đôi khi community được lưu ở đây)
+        place = tweet_data.get('place')
+        if place and isinstance(place, dict) and place:
+            logger.info(f"🔍 Found place data: {place}")
+            if 'community' in place:
+                community_info['is_community'] = True
+                community = place['community']
+                if isinstance(community, dict):
+                    community_info['community_id'] = community.get('id')
+                    community_info['community_name'] = community.get('name')
+                    logger.info(f"✅ Community in place: {community_info['community_name']}")
+        
+        # 6. Kiểm tra URL có chứa /communities/
+        tweet_url = tweet_data.get('url') or tweet_data.get('twitterUrl', '')
+        if '/communities/' in tweet_url or '/i/communities/' in tweet_url:
+            community_info['is_community'] = True
+            logger.info(f"✅ Detected community from URL: {tweet_url}")
+            
+            # Thử extract community ID từ URL
+            import re
+            match = re.search(r'/communities/(\d+)', tweet_url)
+            if match:
+                community_info['community_id'] = match.group(1)
+                logger.info(f"  - Extracted community ID: {community_info['community_id']}")
+        
+        # 7. Kiểm tra trong entities
+        entities = tweet_data.get('entities')
+        if entities and isinstance(entities, dict):
+            # Kiểm tra URLs trong entities
+            urls = entities.get('urls', [])
+            for url_obj in urls:
+                expanded_url = url_obj.get('expanded_url', '')
+                if '/communities/' in expanded_url:
+                    community_info['is_community'] = True
+                    logger.info(f"✅ Detected community from entities URL: {expanded_url}")
+        
+        # Kết quả
         if community_info['is_community']:
-            logger.info(f"🏘️ Tweet từ Community: {community_info['community_name'] or community_info['community_id']}")
+            logger.info(f"🏘️ ✅ COMMUNITY POST DETECTED!")
+            logger.info(f"   - Name: {community_info['community_name'] or 'Unknown'}")
+            logger.info(f"   - ID: {community_info['community_id'] or 'Unknown'}")
         else:
-            logger.warning(f"⚠️ Không phát hiện được community trong tweet này")
+            logger.info(f"ℹ️ Regular tweet (not a community post)")
         
     except Exception as e:
         logger.error(f"❌ Error detecting community post: {str(e)}")
@@ -513,8 +565,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'service': 'twitter-webhook-v3',
-        'version': '3.1-debug',
-        'features': ['photos', 'gifs', 'videos', 'clean_text', 'kol_header', 'preserve_format', 'community_detection', 'debug_logging']
+        'version': '3.3-twitterapi.io',
+        'features': ['photos', 'gifs', 'videos', 'clean_text', 'kol_header', 'preserve_format', 'community_detection_enhanced']
     }), 200
 
 @app.route('/test', methods=['POST'])
@@ -552,7 +604,7 @@ def test_endpoint():
 
 if __name__ == '__main__':
     logger.info("\n" + "=" * 80)
-    logger.info("🚀 KHỞI ĐỘNG TWITTER WEBHOOK SERVER V3.1-DEBUG")
+    logger.info("🚀 KHỞI ĐỘNG TWITTER WEBHOOK SERVER V3.3")
     logger.info("=" * 80)
     logger.info("📋 Tính năng:")
     logger.info("  ✅ Header '🔔 Tweet Mới từ KOL'")
@@ -560,8 +612,8 @@ if __name__ == '__main__':
     logger.info("  ✅ Hiển thị media (ảnh/GIF/video) trong Telegram")
     logger.info("  ✅ Tự động loại bỏ link t.co khỏi nội dung")
     logger.info("  ✅ Kèm link 'Xem Media gốc' và 'Xem tweet gốc'")
-    logger.info("  ✅ Nhận dạng và hiển thị Twitter Community posts")
-    logger.info("  🔍 DEBUG: Log chi tiết cấu trúc tweet data")
+    logger.info("  ✅ Nhận dạng Twitter Community posts (twitterapi.io)")
+    logger.info("  🔍 Kiểm tra nhiều vị trí: URL, entities, context_annotations, card, place")
     logger.info("=" * 80 + "\n")
     
     app.run(host='0.0.0.0', port=5000, debug=True)

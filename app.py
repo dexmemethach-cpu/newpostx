@@ -108,13 +108,30 @@ def extract_media(tweet_data):
 
 def clean_tweet_text(text):
     """
-    Loại bỏ link media (t.co) khỏi nội dung tweet
+    Loại bỏ link media (t.co) khỏi nội dung tweet và giữ nguyên format xuống dòng
     """
     # Loại bỏ các link t.co (Twitter rút gọn link)
     text = re.sub(r'https://t\.co/\w+', '', text)
     
-    # Loại bỏ khoảng trắng thừa
-    text = re.sub(r'\s+', ' ', text)
+    # Loại bỏ khoảng trắng thừa ở đầu/cuối mỗi dòng
+    lines = text.split('\n')
+    lines = [line.strip() for line in lines]
+    
+    # Loại bỏ các dòng trống liên tiếp
+    cleaned_lines = []
+    prev_empty = False
+    for line in lines:
+        if line:
+            cleaned_lines.append(line)
+            prev_empty = False
+        elif not prev_empty:
+            cleaned_lines.append(line)
+            prev_empty = True
+    
+    # Ghép lại với xuống dòng
+    text = '\n'.join(cleaned_lines)
+    
+    # Loại bỏ khoảng trắng thừa ở đầu và cuối
     text = text.strip()
     
     return text
@@ -212,10 +229,10 @@ def format_tweet_caption(tweet, media_url=None):
     user_screen_name = author.get('userName') or author.get('screen_name', 'unknown')
     followers = author.get('followers', 0)
     
-    # Lấy thông tin tweet
-    tweet_text = tweet.get('text', '')
+    # Lấy thông tin tweet - ưu tiên full_text nếu có
+    tweet_text = tweet.get('full_text') or tweet.get('text', '')
     
-    # Loại bỏ link media khỏi text
+    # Loại bỏ link media khỏi text nhưng giữ nguyên format xuống dòng
     tweet_text = clean_tweet_text(tweet_text)
     
     tweet_url = tweet.get('twitterUrl') or tweet.get('url', '')
@@ -271,6 +288,10 @@ def process_tweet(tweet):
     
     logger.info(f"👤 User: @{user_screen_name}")
     logger.info(f"🆔 Tweet ID: {tweet_id}")
+    
+    # Log text gốc để debug
+    tweet_text = tweet.get('full_text') or tweet.get('text', '')
+    logger.info(f"📝 Text gốc: {tweet_text[:100]}...")
     
     # Trích xuất media
     media_list = extract_media(tweet)
@@ -400,7 +421,7 @@ def health_check():
         'status': 'healthy',
         'service': 'twitter-webhook-v3',
         'version': '3.0',
-        'features': ['photos', 'gifs', 'videos', 'clean_text', 'kol_header']
+        'features': ['photos', 'gifs', 'videos', 'clean_text', 'kol_header', 'preserve_format']
     }), 200
 
 @app.route('/test', methods=['POST'])
@@ -409,34 +430,18 @@ def test_endpoint():
     try:
         data = request.json
         
-        # Test với tweet giả có media
+        # Test với tweet giả có xuống dòng
         test_tweet = {
-            'id': '1989606425056948690',
-            'text': data.get('text', '@Neyro_0x https://t.co/tWUeTGiWX5'),
-            'url': 'https://x.com/Zenoxcallz/status/1989606425056948690',
-            'twitterUrl': 'https://twitter.com/Zenoxcallz/status/1989606425056948690',
+            'id': '1234567890',
+            'text': data.get('text', '$DAUMEN CA: GV1uiHtqnFqHYijcBzt2A56Fe9LjoCnszjVbekzvpump\n\nIf you like it, just go for it, guys\n\nLooks appealing and definitely grabs the community\'s attention https://t.co/xxxxx'),
+            'url': 'https://x.com/test/status/1234567890',
+            'twitterUrl': 'https://twitter.com/test/status/1234567890',
             'createdAt': 'Sat Nov 15 08:08:31 +0000 2025',
-            'isReply': True,
+            'isReply': False,
             'author': {
-                'name': 'Zenox 🌙',
-                'userName': 'Zenoxcallz',
-                'followers': 424
-            },
-            'extendedEntities': {
-                'media': [
-                    {
-                        'type': 'animated_gif',
-                        'video_info': {
-                            'variants': [
-                                {
-                                    'bitrate': 0,
-                                    'content_type': 'video/mp4',
-                                    'url': 'https://video.twimg.com/tweet_video/G5yAfjfbcAAK3RN.mp4'
-                                }
-                            ]
-                        }
-                    }
-                ]
+                'name': 'Test User',
+                'userName': 'testuser',
+                'followers': 1000
             }
         }
         
@@ -453,10 +458,10 @@ if __name__ == '__main__':
     logger.info("=" * 80)
     logger.info("📋 Tính năng:")
     logger.info("  ✅ Header '🔔 Tweet Mới từ KOL'")
+    logger.info("  ✅ Giữ nguyên định dạng xuống dòng của tweet gốc")
     logger.info("  ✅ Hiển thị media (ảnh/GIF/video) trong Telegram")
     logger.info("  ✅ Tự động loại bỏ link t.co khỏi nội dung")
     logger.info("  ✅ Kèm link 'Xem Media gốc' và 'Xem tweet gốc'")
-    logger.info("  ✅ Tự động chọn video chất lượng cao nhất")
     logger.info("=" * 80 + "\n")
     
     app.run(host='0.0.0.0', port=5000, debug=True)

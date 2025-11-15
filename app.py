@@ -19,6 +19,63 @@ TELEGRAM_BOT_TOKEN = "8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8"
 TELEGRAM_CHAT_ID = "-1003174496663"
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
+def detect_community_post(tweet_data):
+    """
+    Phát hiện xem tweet có phải từ Twitter Community không
+    
+    Returns:
+        dict: {'is_community': bool, 'community_name': str, 'community_id': str}
+    """
+    community_info = {
+        'is_community': False,
+        'community_name': None,
+        'community_id': None
+    }
+    
+    try:
+        # Kiểm tra trong tweet object trực tiếp
+        if 'community_id' in tweet_data or 'communityId' in tweet_data:
+            community_info['is_community'] = True
+            community_info['community_id'] = tweet_data.get('community_id') or tweet_data.get('communityId')
+            logger.info(f"✅ Community post detected - ID: {community_info['community_id']}")
+        
+        # Kiểm tra trong community object
+        if 'community' in tweet_data:
+            community_info['is_community'] = True
+            community = tweet_data['community']
+            community_info['community_id'] = community.get('id') or community.get('id_str')
+            community_info['community_name'] = community.get('name')
+            logger.info(f"✅ Community post detected - Name: {community.get('name')}, ID: {community.get('id')}")
+        
+        # Kiểm tra trong conversation_context
+        if 'conversation_context' in tweet_data or 'conversationContext' in tweet_data:
+            conv_context = tweet_data.get('conversation_context') or tweet_data.get('conversationContext')
+            if 'community' in conv_context:
+                community_info['is_community'] = True
+                community = conv_context['community']
+                community_info['community_id'] = community.get('id') or community.get('id_str')
+                community_info['community_name'] = community.get('name')
+                logger.info(f"✅ Community post detected in conversation_context - Name: {community.get('name')}")
+        
+        # Kiểm tra trong context_annotations
+        if 'context_annotations' in tweet_data or 'contextAnnotations' in tweet_data:
+            annotations = tweet_data.get('context_annotations') or tweet_data.get('contextAnnotations', [])
+            for annotation in annotations:
+                domain = annotation.get('domain', {})
+                if domain.get('name') == 'Community':
+                    community_info['is_community'] = True
+                    entity = annotation.get('entity', {})
+                    community_info['community_name'] = entity.get('name')
+                    logger.info(f"✅ Community post detected in context_annotations - Name: {entity.get('name')}")
+        
+        if community_info['is_community']:
+            logger.info(f"🏘️ Tweet từ Community: {community_info['community_name'] or community_info['community_id']}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error detecting community post: {str(e)}")
+    
+    return community_info
+
 def extract_media(tweet_data):
     """
     Trích xuất thông tin media từ tweet (ảnh, GIF, video)
@@ -219,7 +276,7 @@ def send_telegram_message(text):
         logger.error(f"❌ Lỗi khi gửi tin nhắn tới Telegram: {e}")
         return None
 
-def format_tweet_caption(tweet, media_url=None):
+def format_tweet_caption(tweet, community_info=None, media_url=None):
     """
     Format tweet thành caption cho media
     """
@@ -243,7 +300,16 @@ def format_tweet_caption(tweet, media_url=None):
     is_quote = tweet.get('quoted_tweet') is not None
     
     # Xác định loại tweet
-    tweet_type = "💬 Reply" if is_reply else ("🔄 Retweet" if is_retweet else ("💭 Quote" if is_quote else "📝 Tweet"))
+    if is_reply:
+        tweet_type = "💬 Reply"
+    elif is_retweet:
+        tweet_type = "🔄 Retweet"
+    elif is_quote:
+        tweet_type = "💭 Quote"
+    elif community_info and community_info['is_community']:
+        tweet_type = "📝 Tweet on community"
+    else:
+        tweet_type = "📝 Tweet"
     
     # Parse thời gian
     created_at = tweet.get('createdAt', '')
@@ -253,17 +319,20 @@ def format_tweet_caption(tweet, media_url=None):
     except:
         time_str = created_at
     
-    # Tạo caption với header mới
-    caption = f"""🔔 <b>Tweet Mới từ KOL</b>
-
-{tweet_type}
-👤 {user_name} (@{user_screen_name})
-👥 Followers: {followers:,}
-
-📝 Nội dung:
-{tweet_text}
-
-"""
+    # Tạo caption với header
+    caption = f"🔔 <b>Tweet Mới từ KOL</b>\n\n"
+    caption += f"{tweet_type}\n"
+    
+    # Thêm thông tin community nếu có
+    if community_info and community_info['is_community']:
+        if community_info['community_name']:
+            caption += f"👥 {community_info['community_name']}\n"
+        else:
+            caption += f"👥 Community\n"
+    
+    caption += f"👤 {user_name} (@{user_screen_name})\n"
+    caption += f"👥 Followers: {followers:,}\n\n"
+    caption += f"📝 Nội dung:\n{tweet_text}\n\n"
     
     # Thêm link media nếu có
     if media_url:
@@ -289,6 +358,9 @@ def process_tweet(tweet):
     logger.info(f"👤 User: @{user_screen_name}")
     logger.info(f"🆔 Tweet ID: {tweet_id}")
     
+    # Phát hiện community post
+    community_info = detect_community_post(tweet)
+    
     # Log text gốc để debug
     tweet_text = tweet.get('full_text') or tweet.get('text', '')
     logger.info(f"📝 Text gốc: {tweet_text[:100]}...")
@@ -305,8 +377,8 @@ def process_tweet(tweet):
         media_type = first_media['type']
         media_url = first_media['url']
         
-        # Tạo caption với link media
-        caption = format_tweet_caption(tweet, media_url)
+        # Tạo caption với link media và thông tin community
+        caption = format_tweet_caption(tweet, community_info, media_url)
         
         # Gửi media tương ứng
         if media_type == 'photo':
@@ -336,7 +408,7 @@ def process_tweet(tweet):
     else:
         # Không có media, chỉ gửi text
         logger.info(f"📝 Tweet không có media, chỉ gửi text...")
-        message = format_tweet_caption(tweet, None)
+        message = format_tweet_caption(tweet, community_info, None)
         send_telegram_message(message)
     
     logger.info(f"✅ Hoàn thành xử lý tweet")
@@ -420,8 +492,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'service': 'twitter-webhook-v3',
-        'version': '3.0',
-        'features': ['photos', 'gifs', 'videos', 'clean_text', 'kol_header', 'preserve_format']
+        'version': '3.1',
+        'features': ['photos', 'gifs', 'videos', 'clean_text', 'kol_header', 'preserve_format', 'community_detection']
     }), 200
 
 @app.route('/test', methods=['POST'])
@@ -430,7 +502,7 @@ def test_endpoint():
     try:
         data = request.json
         
-        # Test với tweet giả có xuống dòng
+        # Test với tweet giả có xuống dòng và community
         test_tweet = {
             'id': '1234567890',
             'text': data.get('text', '$DAUMEN CA: GV1uiHtqnFqHYijcBzt2A56Fe9LjoCnszjVbekzvpump\n\nIf you like it, just go for it, guys\n\nLooks appealing and definitely grabs the community\'s attention https://t.co/xxxxx'),
@@ -442,6 +514,11 @@ def test_endpoint():
                 'name': 'Test User',
                 'userName': 'testuser',
                 'followers': 1000
+            },
+            # Test community data
+            'community': {
+                'id': '123456',
+                'name': 'Crypto Traders'
             }
         }
         
@@ -454,7 +531,7 @@ def test_endpoint():
 
 if __name__ == '__main__':
     logger.info("\n" + "=" * 80)
-    logger.info("🚀 KHỞI ĐỘNG TWITTER WEBHOOK SERVER V3")
+    logger.info("🚀 KHỞI ĐỘNG TWITTER WEBHOOK SERVER V3.1")
     logger.info("=" * 80)
     logger.info("📋 Tính năng:")
     logger.info("  ✅ Header '🔔 Tweet Mới từ KOL'")
@@ -462,6 +539,7 @@ if __name__ == '__main__':
     logger.info("  ✅ Hiển thị media (ảnh/GIF/video) trong Telegram")
     logger.info("  ✅ Tự động loại bỏ link t.co khỏi nội dung")
     logger.info("  ✅ Kèm link 'Xem Media gốc' và 'Xem tweet gốc'")
+    logger.info("  ✅ Nhận dạng và hiển thị Twitter Community posts")
     logger.info("=" * 80 + "\n")
     
     app.run(host='0.0.0.0', port=5000, debug=True)

@@ -292,20 +292,17 @@ def send_to_telegram(tweet_data, author_data):
         logger.error(f"❌ Error sending to Telegram: {str(e)}")
         return False
 
-@app.route('/webhook/twitter', methods=['POST'])
-def twitter_webhook():
+def process_webhook_data(data):
     """
-    Endpoint nhận webhook từ Twitter
+    Xử lý dữ liệu webhook chung
     """
     try:
-        data = request.json
         logger.info(f"📨 Received webhook data")
         
         # Xử lý tweet_create_events
         if 'tweet_create_events' in data:
             for tweet in data['tweet_create_events']:
                 # Lấy thông tin author
-                user_id = tweet.get('user', {}).get('id_str')
                 author_data = tweet.get('user', {})
                 
                 # Gửi đến Telegram
@@ -319,16 +316,47 @@ def twitter_webhook():
         elif 'follow_events' in data:
             logger.info("👥 Received follow event")
         
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing webhook: {str(e)}")
+        return False
+
+# Route cho /webhook (endpoint mới)
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """
+    Endpoint nhận webhook từ Twitter (path: /webhook)
+    """
+    try:
+        data = request.json
+        process_webhook_data(data)
         return jsonify({'status': 'success'}), 200
         
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/webhook/twitter', methods=['GET'])
-def twitter_webhook_challenge():
+# Route cho /webhook/twitter (endpoint cũ - giữ lại để tương thích)
+@app.route('/webhook/twitter', methods=['POST'])
+def twitter_webhook():
     """
-    Endpoint xử lý CRC challenge từ Twitter
+    Endpoint nhận webhook từ Twitter (path: /webhook/twitter)
+    """
+    try:
+        data = request.json
+        process_webhook_data(data)
+        return jsonify({'status': 'success'}), 200
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing webhook: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# CRC Challenge cho /webhook
+@app.route('/webhook', methods=['GET'])
+def webhook_challenge():
+    """
+    Endpoint xử lý CRC challenge từ Twitter (path: /webhook)
     """
     try:
         crc_token = request.args.get('crc_token')
@@ -337,7 +365,39 @@ def twitter_webhook_challenge():
             import hashlib
             import base64
             
-            # Thay YOUR_CONSUMER_SECRET bằng consumer secret của bạn
+            consumer_secret = os.getenv('TWITTER_CONSUMER_SECRET', 'YOUR_CONSUMER_SECRET')
+            
+            # Tạo response token
+            sha256_hash_digest = hmac.new(
+                consumer_secret.encode(),
+                msg=crc_token.encode(),
+                digestmod=hashlib.sha256
+            ).digest()
+            
+            response_token = base64.b64encode(sha256_hash_digest).decode()
+            
+            logger.info("✅ CRC challenge successful")
+            return jsonify({'response_token': f'sha256={response_token}'}), 200
+        else:
+            return jsonify({'status': 'error', 'message': 'No crc_token provided'}), 400
+            
+    except Exception as e:
+        logger.error(f"❌ Error processing CRC challenge: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# CRC Challenge cho /webhook/twitter
+@app.route('/webhook/twitter', methods=['GET'])
+def twitter_webhook_challenge():
+    """
+    Endpoint xử lý CRC challenge từ Twitter (path: /webhook/twitter)
+    """
+    try:
+        crc_token = request.args.get('crc_token')
+        if crc_token:
+            import hmac
+            import hashlib
+            import base64
+            
             consumer_secret = os.getenv('TWITTER_CONSUMER_SECRET', 'YOUR_CONSUMER_SECRET')
             
             # Tạo response token
@@ -377,7 +437,8 @@ def index():
         'service': 'Twitter to Telegram Webhook',
         'version': '2.0',
         'endpoints': {
-            'webhook': '/webhook/twitter',
+            'webhook': '/webhook',
+            'webhook_twitter': '/webhook/twitter',
             'health': '/health'
         }
     }), 200

@@ -43,12 +43,72 @@ def is_community_post(tweet_data):
         logger.info(f"✅ Phát hiện Community Post - Community ID: {tweet_data['communityId']}")
         return True, {
             "id": tweet_data["communityId"],
-            "name": "Twitter Community",  # Tên mặc định nếu không có thông tin chi tiết
+            "name": "Twitter Community",
             "description": "",
             "created_at": ""
         }
     
     return False, None
+
+def extract_author_info(tweet_data):
+    """
+    Trích xuất thông tin tác giả từ nhiều nguồn khác nhau
+    
+    Returns:
+        dict: {'username': str, 'name': str, 'id': str}
+    """
+    author_info = {
+        'username': 'unknown',
+        'name': 'Unknown User',
+        'id': ''
+    }
+    
+    # Thử lấy từ field "author"
+    if "author" in tweet_data and tweet_data["author"]:
+        author = tweet_data["author"]
+        author_info['username'] = author.get("username") or author.get("screen_name", "unknown")
+        author_info['name'] = author.get("name", author_info['username'])
+        author_info['id'] = author.get("id_str") or author.get("id", "")
+    
+    # Thử lấy từ field "user"
+    elif "user" in tweet_data and tweet_data["user"]:
+        user = tweet_data["user"]
+        author_info['username'] = user.get("screen_name") or user.get("username", "unknown")
+        author_info['name'] = user.get("name", author_info['username'])
+        author_info['id'] = user.get("id_str") or user.get("id", "")
+    
+    # Thử lấy từ root level
+    else:
+        if "username" in tweet_data:
+            author_info['username'] = tweet_data["username"]
+        elif "screen_name" in tweet_data:
+            author_info['username'] = tweet_data["screen_name"]
+        
+        if "name" in tweet_data:
+            author_info['name'] = tweet_data["name"]
+        
+        if "user_id" in tweet_data:
+            author_info['id'] = tweet_data["user_id"]
+    
+    return author_info
+
+def extract_tweet_text(tweet_data):
+    """
+    Trích xuất text từ tweet với nhiều fallback options
+    
+    Returns:
+        str: Nội dung tweet
+    """
+    # Thử các field khác nhau
+    text = (
+        tweet_data.get("text") or 
+        tweet_data.get("full_text") or 
+        tweet_data.get("extended_tweet", {}).get("full_text") or
+        tweet_data.get("content") or
+        ""
+    )
+    
+    return text.strip()
 
 def extract_media_info(tweet_data):
     """
@@ -69,9 +129,32 @@ def extract_media_info(tweet_data):
         'media_urls': []
     }
     
-    # Kiểm tra trong entities.media
-    if "entities" in tweet_data and "media" in tweet_data["entities"]:
-        media_list = tweet_data["entities"]["media"]
+    # Danh sách các nơi có thể chứa media
+    media_sources = []
+    
+    # Kiểm tra extended_entities trước (ưu tiên cao nhất)
+    if "extended_entities" in tweet_data and "media" in tweet_data["extended_entities"]:
+        media_sources.append(tweet_data["extended_entities"]["media"])
+    
+    # Kiểm tra entities.media
+    elif "entities" in tweet_data and "media" in tweet_data["entities"]:
+        media_sources.append(tweet_data["entities"]["media"])
+    
+    # Kiểm tra extended_tweet
+    elif "extended_tweet" in tweet_data:
+        ext_tweet = tweet_data["extended_tweet"]
+        if "extended_entities" in ext_tweet and "media" in ext_tweet["extended_entities"]:
+            media_sources.append(ext_tweet["extended_entities"]["media"])
+        elif "entities" in ext_tweet and "media" in ext_tweet["entities"]:
+            media_sources.append(ext_tweet["entities"]["media"])
+    
+    # Kiểm tra attachments
+    if "attachments" in tweet_data and "media" in tweet_data["attachments"]:
+        media_sources.append(tweet_data["attachments"]["media"])
+    
+    # Xử lý media từ nguồn đầu tiên tìm thấy
+    if media_sources:
+        media_list = media_sources[0]
         media_info['has_media'] = True
         media_info['media_count'] = len(media_list)
         
@@ -82,7 +165,10 @@ def extract_media_info(tweet_data):
             
             # Lấy URL chất lượng cao nhất
             if media_type == "photo":
-                media_info['media_urls'].append(media.get("media_url_https") or media.get("media_url"))
+                url = media.get("media_url_https") or media.get("media_url") or media.get("url")
+                if url:
+                    media_info['media_urls'].append(url)
+            
             elif media_type == "video" or media_type == "animated_gif":
                 # Lấy video URL từ video_info
                 video_info = media.get("video_info", {})
@@ -91,40 +177,16 @@ def extract_media_info(tweet_data):
                 video_variants = [v for v in variants if "bitrate" in v]
                 if video_variants:
                     best_variant = max(video_variants, key=lambda x: x.get("bitrate", 0))
-                    media_info['media_urls'].append(best_variant.get("url"))
+                    url = best_variant.get("url")
+                    if url:
+                        media_info['media_urls'].append(url)
+                elif variants:
+                    # Fallback: lấy variant đầu tiên nếu không có bitrate
+                    url = variants[0].get("url")
+                    if url:
+                        media_info['media_urls'].append(url)
         
         # Xác định loại media
-        if len(media_types) > 1:
-            media_info['media_type'] = "mixed"
-        elif "animated_gif" in media_types:
-            media_info['media_type'] = "gif"
-        elif "video" in media_types:
-            media_info['media_type'] = "video"
-        elif "photo" in media_types:
-            media_info['media_type'] = "photo"
-    
-    # Kiểm tra trong extended_entities (cho nhiều ảnh)
-    if "extended_entities" in tweet_data and "media" in tweet_data["extended_entities"]:
-        media_list = tweet_data["extended_entities"]["media"]
-        media_info['has_media'] = True
-        media_info['media_count'] = len(media_list)
-        media_info['media_urls'] = []
-        
-        media_types = set()
-        for media in media_list:
-            media_type = media.get("type", "")
-            media_types.add(media_type)
-            
-            if media_type == "photo":
-                media_info['media_urls'].append(media.get("media_url_https") or media.get("media_url"))
-            elif media_type == "video" or media_type == "animated_gif":
-                video_info = media.get("video_info", {})
-                variants = video_info.get("variants", [])
-                video_variants = [v for v in variants if "bitrate" in v]
-                if video_variants:
-                    best_variant = max(video_variants, key=lambda x: x.get("bitrate", 0))
-                    media_info['media_urls'].append(best_variant.get("url"))
-        
         if len(media_types) > 1:
             media_info['media_type'] = "mixed"
         elif "animated_gif" in media_types:
@@ -151,9 +213,9 @@ def format_tweet_caption(tweet_data, is_reply=False):
     is_community, community_info = is_community_post(tweet_data)
     
     # Lấy thông tin tác giả
-    author = tweet_data.get("author", {})
-    username = author.get("username", "unknown")
-    name = author.get("name", username)
+    author = extract_author_info(tweet_data)
+    username = author['username']
+    name = author['name']
     
     # Xác định header dựa trên loại post
     if is_community:
@@ -168,7 +230,7 @@ def format_tweet_caption(tweet_data, is_reply=False):
             header = "🔔 Tweet Mới từ KOL"
     
     # Lấy nội dung tweet
-    text = tweet_data.get("text", "")
+    text = extract_tweet_text(tweet_data)
     
     # Lấy thông tin media
     media_info = extract_media_info(tweet_data)
@@ -190,7 +252,7 @@ def format_tweet_caption(tweet_data, is_reply=False):
         
         # Thêm description nếu có
         if community_info.get("description"):
-            description = community_info["description"][:100]  # Giới hạn độ dài
+            description = community_info["description"][:100]
             caption_parts.append(f"📝 {description}")
         
         caption_parts.append("")
@@ -204,6 +266,8 @@ def format_tweet_caption(tweet_data, is_reply=False):
         if len(text) > 500:
             text = text[:497] + "..."
         caption_parts.append(f"\n{text}")
+    else:
+        caption_parts.append("\n<i>(Không có nội dung text)</i>")
     
     # Thêm thông tin media
     if media_info['has_media']:
@@ -223,21 +287,35 @@ def format_tweet_caption(tweet_data, is_reply=False):
             caption_parts.append(f"\n📎 {media_count} media files")
     
     # Thêm link đến tweet
-    tweet_id = tweet_data.get("id") or tweet_data.get("id_str")
+    tweet_id = tweet_data.get("id_str") or tweet_data.get("id") or tweet_data.get("tweet_id")
     if tweet_id:
         tweet_url = f"https://twitter.com/{username}/status/{tweet_id}"
         caption_parts.append(f"\n🔗 <a href='{tweet_url}'>Xem tweet gốc</a>")
     
     # Thêm timestamp
-    created_at = tweet_data.get("created_at", "")
+    created_at = tweet_data.get("created_at") or tweet_data.get("timestamp")
     if created_at:
         try:
-            # Parse timestamp (format có thể khác nhau)
-            dt = datetime.strptime(created_at, "%a %b %d %H:%M:%S %z %Y")
-            time_str = dt.strftime("%d/%m/%Y %H:%M")
-            caption_parts.append(f"🕐 {time_str}")
-        except:
-            pass
+            # Thử parse nhiều format khác nhau
+            formats = [
+                "%a %b %d %H:%M:%S %z %Y",  # Twitter format
+                "%Y-%m-%dT%H:%M:%S.%fZ",     # ISO format
+                "%Y-%m-%d %H:%M:%S"          # Simple format
+            ]
+            
+            dt = None
+            for fmt in formats:
+                try:
+                    dt = datetime.strptime(str(created_at), fmt)
+                    break
+                except:
+                    continue
+            
+            if dt:
+                time_str = dt.strftime("%d/%m/%Y %H:%M")
+                caption_parts.append(f"🕐 {time_str}")
+        except Exception as e:
+            logger.warning(f"⚠️ Không thể parse timestamp: {created_at}")
     
     return "\n".join(caption_parts)
 
@@ -283,20 +361,58 @@ def webhook():
         
         logger.info("=" * 50)
         logger.info("📨 Nhận được webhook từ Twitter")
-        logger.info(f"📦 Data: {data}")
+        
+        # Log toàn bộ data để debug
+        logger.info(f"📦 Raw Data Keys: {list(data.keys()) if data else 'None'}")
         
         # Kiểm tra xem có phải là tweet event không
         if not data:
             logger.warning("⚠️ Không có dữ liệu trong request")
             return jsonify({"status": "error", "message": "No data"}), 400
         
-        # Xử lý tweet data
-        tweet_data = data.get("tweet_create_events", [{}])[0] if "tweet_create_events" in data else data
+        # Xử lý tweet data - thử nhiều cấu trúc khác nhau
+        tweet_data = None
+        
+        # Cấu trúc 1: tweet_create_events (Twitter Account Activity API)
+        if "tweet_create_events" in data and data["tweet_create_events"]:
+            tweet_data = data["tweet_create_events"][0]
+            logger.info("📍 Sử dụng cấu trúc: tweet_create_events")
+        
+        # Cấu trúc 2: data object (Twitter API v2)
+        elif "data" in data:
+            tweet_data = data["data"]
+            logger.info("📍 Sử dụng cấu trúc: data")
+        
+        # Cấu trúc 3: Direct tweet object
+        elif "id" in data or "id_str" in data:
+            tweet_data = data
+            logger.info("📍 Sử dụng cấu trúc: direct object")
+        
+        # Cấu trúc 4: Nested trong tweet
+        elif "tweet" in data:
+            tweet_data = data["tweet"]
+            logger.info("📍 Sử dụng cấu trúc: tweet")
+        
+        else:
+            logger.error(f"❌ Không nhận diện được cấu trúc data. Keys: {list(data.keys())}")
+            # Log một phần data để debug (giới hạn 500 ký tự)
+            import json
+            data_str = json.dumps(data, indent=2)[:500]
+            logger.error(f"📦 Data sample: {data_str}")
+            return jsonify({"status": "error", "message": "Unknown data structure"}), 400
+        
+        # Log thông tin tweet
+        tweet_id = tweet_data.get("id_str") or tweet_data.get("id")
+        logger.info(f"🆔 Tweet ID: {tweet_id}")
         
         # Kiểm tra xem có phải là reply không
-        is_reply = tweet_data.get("in_reply_to_status_id") is not None or \
-                   tweet_data.get("in_reply_to_status_id_str") is not None or \
-                   tweet_data.get("isReply", False)
+        is_reply = (
+            tweet_data.get("in_reply_to_status_id") is not None or 
+            tweet_data.get("in_reply_to_status_id_str") is not None or 
+            tweet_data.get("in_reply_to_user_id") is not None or
+            tweet_data.get("isReply", False) or
+            tweet_data.get("referenced_tweets") is not None
+        )
         
         # Kiểm tra community post
         is_community, community_info = is_community_post(tweet_data)
@@ -310,6 +426,14 @@ def webhook():
         
         if is_reply:
             logger.info("💬 Đây là một reply")
+        
+        # Lấy thông tin author để log
+        author = extract_author_info(tweet_data)
+        logger.info(f"👤 Author: {author['name']} (@{author['username']})")
+        
+        # Lấy text để log
+        text = extract_tweet_text(tweet_data)
+        logger.info(f"📝 Text: {text[:100]}..." if len(text) > 100 else f"📝 Text: {text}")
         
         # Format caption
         caption = format_tweet_caption(tweet_data, is_reply=is_reply)
@@ -336,14 +460,16 @@ def health():
     """
     return jsonify({
         "status": "healthy",
-        "service": "Twitter Webhook with Community Detection v4",
+        "service": "Twitter Webhook with Community Detection v4.1",
         "timestamp": datetime.now().isoformat(),
         "features": [
             "Community post detection",
             "Regular post handling",
             "Reply detection",
             "Media support (photo, gif, video)",
-            "Community info extraction"
+            "Community info extraction",
+            "Multiple data structure support",
+            "Enhanced error handling"
         ]
     }), 200
 
@@ -353,19 +479,69 @@ def home():
     Home endpoint
     """
     return jsonify({
-        "message": "Twitter Webhook Service with Community Detection v4",
+        "message": "Twitter Webhook Service with Community Detection v4.1",
         "endpoints": {
             "/webhook": "POST - Nhận webhook từ Twitter",
             "/health": "GET - Health check",
-            "/test": "POST - Test với dữ liệu mẫu"
+            "/test": "POST - Test với dữ liệu mẫu",
+            "/debug": "POST - Debug data structure"
         },
         "features": {
             "community_detection": "Phát hiện và xử lý Twitter Community posts",
             "media_support": "Hỗ trợ ảnh, GIF, video",
             "reply_detection": "Phát hiện reply trong cả regular và community posts",
-            "formatted_output": "Format đẹp với icon và thông tin đầy đủ"
+            "formatted_output": "Format đẹp với icon và thông tin đầy đủ",
+            "multi_structure": "Hỗ trợ nhiều cấu trúc data từ Twitter API"
         }
     }), 200
+
+@app.route('/debug', methods=['POST'])
+def debug():
+    """
+    Debug endpoint để xem cấu trúc data
+    """
+    try:
+        data = request.get_json()
+        
+        import json
+        
+        response = {
+            "received_keys": list(data.keys()) if data else [],
+            "data_structure": {},
+            "extracted_info": {}
+        }
+        
+        # Phân tích cấu trúc
+        if "tweet_create_events" in data:
+            response["data_structure"]["type"] = "tweet_create_events"
+            tweet_data = data["tweet_create_events"][0] if data["tweet_create_events"] else {}
+        elif "data" in data:
+            response["data_structure"]["type"] = "data"
+            tweet_data = data["data"]
+        elif "tweet" in data:
+            response["data_structure"]["type"] = "tweet"
+            tweet_data = data["tweet"]
+        else:
+            response["data_structure"]["type"] = "direct"
+            tweet_data = data
+        
+        # Trích xuất thông tin
+        if tweet_data:
+            response["extracted_info"]["author"] = extract_author_info(tweet_data)
+            response["extracted_info"]["text"] = extract_tweet_text(tweet_data)
+            response["extracted_info"]["media"] = extract_media_info(tweet_data)
+            is_community, community_info = is_community_post(tweet_data)
+            response["extracted_info"]["is_community"] = is_community
+            response["extracted_info"]["community_info"] = community_info
+        
+        # Log để debug
+        logger.info(f"🔍 Debug Info: {json.dumps(response, indent=2)}")
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        logger.error(f"❌ Lỗi trong debug: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/test', methods=['POST'])
 def test():
@@ -375,23 +551,22 @@ def test():
     try:
         # Dữ liệu test cho community post
         test_data = request.get_json() or {
-            "id": "1234567890",
             "id_str": "1234567890",
-            "text": "This is a test community post! 🚀",
+            "text": "This is a test community post! 🚀 #crypto #trading",
             "created_at": "Mon Jan 01 12:00:00 +0000 2024",
-            "author": {
-                "id": "123456",
-                "username": "testuser",
-                "name": "Test User"
+            "user": {
+                "id_str": "123456",
+                "screen_name": "cryptotrader",
+                "name": "Crypto Trader VN"
             },
             "community": {
                 "id_str": "1234567890",
                 "name": "Crypto Traders Vietnam",
-                "description": "Cộng đồng trader crypto Việt Nam",
+                "description": "Cộng đồng trader crypto Việt Nam - Chia sẻ kiến thức và kinh nghiệm",
                 "created_at": "2023-01-01"
             },
             "communityId": "1234567890",
-            "isReply": False,
+            "in_reply_to_status_id": None,
             "entities": {
                 "media": [
                     {
@@ -407,6 +582,12 @@ def test():
         # Kiểm tra community
         is_community, community_info = is_community_post(test_data)
         
+        # Lấy author info
+        author = extract_author_info(test_data)
+        
+        # Lấy text
+        text = extract_tweet_text(test_data)
+        
         # Format caption
         caption = format_tweet_caption(test_data, is_reply=False)
         
@@ -417,6 +598,8 @@ def test():
             "status": "success" if success else "error",
             "is_community": is_community,
             "community_info": community_info,
+            "author": author,
+            "text": text,
             "caption": caption,
             "sent_to_telegram": success
         }), 200
@@ -426,7 +609,7 @@ def test():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
-    logger.info("🚀 Starting Twitter Webhook Service with Community Detection v4")
+    logger.info("🚀 Starting Twitter Webhook Service with Community Detection v4.1")
     logger.info(f"📱 Telegram Chat ID: {TELEGRAM_CHAT_ID}")
-    logger.info("✨ Features: Community detection, Media support, Reply handling")
+    logger.info("✨ Features: Community detection, Media support, Reply handling, Enhanced data extraction")
     app.run(host='0.0.0.0', port=5000, debug=True)

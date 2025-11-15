@@ -1,139 +1,162 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 import requests
-import re
+import json
 
 app = Flask(__name__)
 
-# Enable CORS for all domains
-CORS(app)
+# Thông tin Telegram Bot
+TELEGRAM_BOT_TOKEN = "8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8"
+TELEGRAM_CHAT_ID = "-1003174496663"
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
-# Thông tin Telegram bot
-TELEGRAM_API_TOKEN = '8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8'
-CHAT_ID = '-1003174496663'
-
-def send_to_telegram(message, photo_url=None):
-    try:
-        # Nếu có ảnh, gửi ảnh qua API sendPhoto
-        if photo_url:
-            url = f"https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendPhoto"
-            payload = {"chat_id": CHAT_ID, "photo": photo_url, "caption": message}
-        else:
-            # Nếu không có ảnh, gửi tin nhắn văn bản
-            url = f"https://api.telegram.org/bot{TELEGRAM_API_TOKEN}/sendMessage"
-            payload = {"chat_id": CHAT_ID, "text": message}
-
-        # Gửi yêu cầu POST đến Telegram
-        response = requests.post(url, data=payload)
-        
-        # Kiểm tra xem có lỗi trong quá trình gửi tin nhắn không
-        response.raise_for_status()
-
-        # In phản hồi từ Telegram để kiểm tra
-        print("Response from Telegram:", response.json())
-        return {"ok": True, "response": response.json()}
+def extract_photo_urls(tweet_data):
+    """
+    Trích xuất URL ảnh từ tweet
+    Kiểm tra cả extendedEntities và entities để lấy media
+    """
+    photo_urls = []
     
-    except requests.exceptions.RequestException as e:
-        # Nếu có lỗi khi gửi yêu cầu, in lỗi ra console
-        print(f"Error sending message to Telegram: {e}")
-        return {"ok": False, "error": str(e)}
+    # Kiểm tra extendedEntities trước (chứa media chất lượng cao hơn)
+    if "extendedEntities" in tweet_data and "media" in tweet_data["extendedEntities"]:
+        for media in tweet_data["extendedEntities"]["media"]:
+            if media.get("type") == "photo":
+                photo_urls.append(media.get("media_url_https") or media.get("mediaUrl"))
+    
+    # Nếu không có trong extendedEntities, kiểm tra entities
+    if not photo_urls and "entities" in tweet_data and "media" in tweet_data["entities"]:
+        for media in tweet_data["entities"]["media"]:
+            if media.get("type") == "photo":
+                photo_urls.append(media.get("media_url_https") or media.get("mediaUrl"))
+    
+    # Lọc bỏ giá trị None
+    return [url for url in photo_urls if url]
 
-@app.route('/')
-def home():
-    return "✅ Twitter Webhook is running!", 200
+def format_tweet_message(tweet_data):
+    """
+    Định dạng thông báo tweet để gửi qua Telegram
+    Phân loại rõ ràng giữa bài đăng gốc và bài trả lời
+    """
+    # Lấy thông tin tác giả
+    author = tweet_data.get("author", {})
+    author_name = author.get("name", "Unknown")
+    author_username = author.get("userName", "unknown")
+    
+    # Lấy nội dung tweet
+    text = tweet_data.get("text", "")
+    tweet_url = tweet_data.get("twitterUrl") or tweet_data.get("url", "")
+    
+    # KIỂM TRA LOẠI TWEET: Bài gốc hay trả lời
+    # Sử dụng trường "isReply" để xác định chính xác
+    is_reply = tweet_data.get("isReply", False)
+    in_reply_to_id = tweet_data.get("inReplyToId")
+    in_reply_to_username = tweet_data.get("inReplyToUsername")
+    
+    # Trích xuất URL ảnh
+    photo_urls = extract_photo_urls(tweet_data)
+    
+    # Tạo thông báo dựa trên loại tweet
+    if is_reply and in_reply_to_username:
+        # ĐÂY LÀ BÀI TRẢ LỜI
+        message = f"💬 <b>REPLY</b> từ @{author_username}\n\n"
+        message += f"👤 Trả lời cho: @{in_reply_to_username}\n"
+        if in_reply_to_id:
+            message += f"🔗 Reply to tweet: https://twitter.com/{in_reply_to_username}/status/{in_reply_to_id}\n"
+        message += f"\n📝 Nội dung:\n{text}\n"
+    else:
+        # ĐÂY LÀ BÀI ĐĂNG GỐC
+        message = f"🆕 <b>BÀI ĐĂNG MỚI</b> từ @{author_username}\n\n"
+        message += f"👤 Tác giả: {author_name}\n"
+        message += f"\n📝 Nội dung:\n{text}\n"
+    
+    # Thêm URL tweet gốc
+    if tweet_url:
+        message += f"\n🔗 Link: {tweet_url}"
+    
+    # Thêm thông tin ảnh nếu có
+    if photo_urls:
+        message += f"\n\n📷 Có {len(photo_urls)} ảnh đính kèm"
+        for idx, url in enumerate(photo_urls, 1):
+            message += f"\n  {idx}. {url}"
+    
+    return message
+
+def send_telegram_message(message):
+    """
+    Gửi thông báo đến Telegram
+    """
+    try:
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False
+        }
+        
+        response = requests.post(TELEGRAM_API_URL, json=payload)
+        
+        if response.status_code == 200:
+            print("✅ Đã gửi thông báo đến Telegram thành công")
+            return True
+        else:
+            print(f"❌ Lỗi khi gửi đến Telegram: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Exception khi gửi Telegram: {str(e)}")
+        return False
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # Nhận dữ liệu từ Webhook
-    data = request.get_json(silent=True)
-    print(f"Received data: {data}")
+    """
+    Endpoint nhận webhook từ Twitter/X
+    """
+    try:
+        # Lấy dữ liệu JSON từ request
+        tweet_data = request.get_json()
+        
+        if not tweet_data:
+            return jsonify({"error": "No data received"}), 400
+        
+        # Log dữ liệu nhận được (để debug)
+        print("📥 Nhận được tweet data:")
+        print(json.dumps(tweet_data, indent=2, ensure_ascii=False))
+        
+        # Định dạng và gửi thông báo
+        message = format_tweet_message(tweet_data)
+        success = send_telegram_message(message)
+        
+        if success:
+            return jsonify({
+                "status": "success",
+                "message": "Tweet processed and sent to Telegram"
+            }), 200
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Failed to send to Telegram"
+            }), 500
+            
+    except Exception as e:
+        print(f"❌ Lỗi xử lý webhook: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
-    # Kiểm tra dữ liệu có đúng không
-    if not data:
-        return jsonify({"status": "bad_request", "error": "Invalid or empty JSON body"}), 400
-
-    # Kiểm tra trường 'tweets' có phải là mảng không và không rỗng
-    tweets = data.get("tweets")
-    if not isinstance(tweets, list) or len(tweets) == 0:
-        return jsonify({"status": "bad_request", "error": "Missing or empty 'tweets' array"}), 400
-
-    results = []
-    for t in tweets:
-        # Kiểm tra xem mỗi tweet có phải là dict và có trường 'id'
-        if not isinstance(t, dict) or not t.get("id"):
-            results.append({"ok": False, "error": "invalid_tweet_object"})
-            continue
-
-        # Tạo message từ tweet và gửi Telegram
-        message, photo_url = format_tweet_message(t)
-        send_res = send_to_telegram(message, photo_url)  # Gửi thông điệp và ảnh (nếu có)
-
-        # Lưu kết quả gửi tin nhắn và thông tin tweet
-        results.append({
-            "tweet": {
-                "id": str(t.get("id")),
-                "text": t.get("text", ""),
-                "author": (t.get("author") or {}).get("userName"),
-                "url": t.get("twitterUrl") or t.get("url")
-            },
-            "telegram": send_res
-        })
-
-    # Kiểm tra tất cả kết quả gửi Telegram
-    overall_ok = all(item.get("telegram", {}).get("ok") for item in results if isinstance(item, dict))
-    
-    # Tạo phản hồi tổng thể
-    response = {
-        "status": "ok" if overall_ok else "partial_ok",
-        "event_type": data.get("event_type"),
-        "timestamp": data.get("timestamp"),
-        "results": results
-    }
-
-    # Trả về mã 200 nếu tất cả gửi thành công, 207 nếu có lỗi
-    return jsonify(response), 200 if overall_ok else 207
-
-# Hàm format message từ tweet (có thể tùy chỉnh theo yêu cầu)
-def format_tweet_message(tweet):
-    user = tweet.get("author", {}).get("userName", "Unknown User")
-    text = tweet.get("text", "")
-    tweet_id = tweet.get("id", "")
-    link = f"https://twitter.com/{user}/status/{tweet_id}"
-
-    # Lấy URL ảnh từ tweet (nếu có)
-    photo_url = None
-    media = tweet.get("media", [])
-    if media:
-        # Lấy ảnh URL từ trường media
-        photo_url = media[0].get("media_url", None)  # Giả sử ảnh đầu tiên trong media
-    
-    # Kiểm tra nếu tweet là bài post hay comment
-    if tweet.get("inReplyToStatusId"):
-        message_type = "Bình luận"
-        original_tweet_id = tweet.get("inReplyToStatusId")
-        original_tweet_link = f"https://twitter.com/{user}/status/{original_tweet_id}"
-        reply_to = f"Trả lời tweet: {original_tweet_link}"
-    else:
-        message_type = "Bài post"
-        reply_to = "Không phải bình luận, là bài post gốc."
-
-    # Định dạng lại thông điệp với thông tin bài post hoặc comment
-    message = f"""
-{message_type} từ @{user}:
-
-{text}
-
-Link: {link}
-
-{reply_to}
-
---------------------------------------------
-
-X (formerly Twitter)
-{user} (@{user}) on X
-{text}
-"""
-    return message, photo_url
+@app.route('/health', methods=['GET'])
+def health():
+    """
+    Endpoint kiểm tra health của service
+    """
+    return jsonify({
+        "status": "healthy",
+        "service": "Twitter Webhook to Telegram"
+    }), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    print("🚀 Starting Twitter Webhook Server...")
+    print(f"📱 Telegram Chat ID: {TELEGRAM_CHAT_ID}")
+    print(f"🔗 Webhook endpoint: http://localhost:5000/webhook")
+    print(f"💚 Health check: http://localhost:5000/health")
+    app.run(host='0.0.0.0', port=5000, debug=True)

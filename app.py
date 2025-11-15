@@ -3,6 +3,7 @@ import requests
 import logging
 import os
 from datetime import datetime
+import json
 
 app = Flask(__name__)
 
@@ -140,14 +141,14 @@ def format_tweet_caption(tweet_data, author_data, community_info=None):
     try:
         # Thông tin tác giả
         author_name = author_data.get('name', 'Unknown')
-        author_username = author_data.get('username', 'unknown')
+        author_username = author_data.get('username', author_data.get('screen_name', 'unknown'))
         followers_count = author_data.get('followers_count', 0)
         
         # Nội dung tweet
-        tweet_text = tweet_data.get('text', '')
+        tweet_text = tweet_data.get('text', tweet_data.get('full_text', ''))
         
         # Tweet ID và link
-        tweet_id = tweet_data.get('id_str', tweet_data.get('id', ''))
+        tweet_id = tweet_data.get('id_str', str(tweet_data.get('id', '')))
         tweet_url = f"https://twitter.com/{author_username}/status/{tweet_id}"
         
         # Thời gian
@@ -297,13 +298,18 @@ def process_webhook_data(data):
     Xử lý dữ liệu webhook chung
     """
     try:
+        # LOG DỮ LIỆU WEBHOOK ĐỂ DEBUG
         logger.info(f"📨 Received webhook data")
+        logger.info(f"🔍 Webhook keys: {list(data.keys())}")
+        logger.info(f"📦 Full webhook data: {json.dumps(data, indent=2)}")
         
         # Xử lý tweet_create_events
         if 'tweet_create_events' in data:
+            logger.info(f"✅ Found tweet_create_events with {len(data['tweet_create_events'])} tweets")
             for tweet in data['tweet_create_events']:
                 # Lấy thông tin author
                 author_data = tweet.get('user', {})
+                logger.info(f"👤 Processing tweet from @{author_data.get('screen_name', 'unknown')}")
                 
                 # Gửi đến Telegram
                 send_to_telegram(tweet, author_data)
@@ -316,10 +322,20 @@ def process_webhook_data(data):
         elif 'follow_events' in data:
             logger.info("👥 Received follow event")
         
+        # Xử lý direct_message_events
+        elif 'direct_message_events' in data:
+            logger.info("💬 Received direct message event")
+        
+        # Xử lý các event khác
+        else:
+            logger.warning(f"⚠️ Unknown webhook event type. Keys: {list(data.keys())}")
+        
         return True
         
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {str(e)}")
+        import traceback
+        logger.error(f"📋 Traceback: {traceback.format_exc()}")
         return False
 
 # Route cho /webhook (endpoint mới)
@@ -330,11 +346,17 @@ def webhook():
     """
     try:
         data = request.json
+        if not data:
+            logger.warning("⚠️ Received empty webhook data")
+            return jsonify({'status': 'error', 'message': 'Empty data'}), 400
+        
         process_webhook_data(data)
         return jsonify({'status': 'success'}), 200
         
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {str(e)}")
+        import traceback
+        logger.error(f"📋 Traceback: {traceback.format_exc()}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # Route cho /webhook/twitter (endpoint cũ - giữ lại để tương thích)
@@ -345,11 +367,17 @@ def twitter_webhook():
     """
     try:
         data = request.json
+        if not data:
+            logger.warning("⚠️ Received empty webhook data")
+            return jsonify({'status': 'error', 'message': 'Empty data'}), 400
+        
         process_webhook_data(data)
         return jsonify({'status': 'success'}), 200
         
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {str(e)}")
+        import traceback
+        logger.error(f"📋 Traceback: {traceback.format_exc()}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # CRC Challenge cho /webhook

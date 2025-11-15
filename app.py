@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import requests
 import logging
 import json
+import re
 from datetime import datetime
 
 # Cấu hình logging
@@ -105,6 +106,82 @@ def extract_media(tweet_data):
     logger.info(f"📊 Tổng cộng trích xuất được {len(media_list)} media items")
     return media_list
 
+def clean_tweet_text(text):
+    """
+    Loại bỏ link media (t.co) khỏi nội dung tweet
+    """
+    # Loại bỏ các link t.co (Twitter rút gọn link)
+    text = re.sub(r'https://t\.co/\w+', '', text)
+    
+    # Loại bỏ khoảng trắng thừa
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    return text
+
+def send_telegram_photo(photo_url, caption=None):
+    """Gửi ảnh tới Telegram"""
+    url = f"{TELEGRAM_API_URL}/sendPhoto"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'photo': photo_url
+    }
+    if caption:
+        payload['caption'] = caption
+        payload['parse_mode'] = 'HTML'
+    
+    try:
+        logger.info(f"📤 Đang gửi ảnh tới Telegram...")
+        response = requests.post(url, json=payload, timeout=30)
+        response.raise_for_status()
+        logger.info(f"✅ Đã gửi ảnh tới Telegram thành công")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Lỗi khi gửi ảnh tới Telegram: {e}")
+        return None
+
+def send_telegram_animation(animation_url, caption=None):
+    """Gửi GIF (animation) tới Telegram"""
+    url = f"{TELEGRAM_API_URL}/sendAnimation"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'animation': animation_url
+    }
+    if caption:
+        payload['caption'] = caption
+        payload['parse_mode'] = 'HTML'
+    
+    try:
+        logger.info(f"📤 Đang gửi GIF tới Telegram...")
+        response = requests.post(url, json=payload, timeout=30)
+        response.raise_for_status()
+        logger.info(f"✅ Đã gửi GIF tới Telegram thành công")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Lỗi khi gửi GIF tới Telegram: {e}")
+        return None
+
+def send_telegram_video(video_url, caption=None):
+    """Gửi video tới Telegram"""
+    url = f"{TELEGRAM_API_URL}/sendVideo"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'video': video_url
+    }
+    if caption:
+        payload['caption'] = caption
+        payload['parse_mode'] = 'HTML'
+    
+    try:
+        logger.info(f"📤 Đang gửi video tới Telegram...")
+        response = requests.post(url, json=payload, timeout=30)
+        response.raise_for_status()
+        logger.info(f"✅ Đã gửi video tới Telegram thành công")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Lỗi khi gửi video tới Telegram: {e}")
+        return None
+
 def send_telegram_message(text):
     """Gửi tin nhắn text tới Telegram"""
     url = f"{TELEGRAM_API_URL}/sendMessage"
@@ -125,9 +202,9 @@ def send_telegram_message(text):
         logger.error(f"❌ Lỗi khi gửi tin nhắn tới Telegram: {e}")
         return None
 
-def format_tweet_message(tweet, media_list=None):
+def format_tweet_caption(tweet, media_url=None):
     """
-    Format tweet thành message đẹp cho Telegram
+    Format tweet thành caption cho media
     """
     # Lấy thông tin user
     author = tweet.get('author') or tweet.get('user', {})
@@ -137,8 +214,11 @@ def format_tweet_message(tweet, media_list=None):
     
     # Lấy thông tin tweet
     tweet_text = tweet.get('text', '')
+    
+    # Loại bỏ link media khỏi text
+    tweet_text = clean_tweet_text(tweet_text)
+    
     tweet_url = tweet.get('twitterUrl') or tweet.get('url', '')
-    tweet_id = tweet.get('id_str') or tweet.get('id', '')
     
     # Kiểm tra loại tweet
     is_reply = tweet.get('isReply', False)
@@ -151,14 +231,15 @@ def format_tweet_message(tweet, media_list=None):
     # Parse thời gian
     created_at = tweet.get('createdAt', '')
     try:
-        # Format: "Sat Nov 15 07:36:22 +0000 2025"
         dt = datetime.strptime(created_at, "%a %b %d %H:%M:%S %z %Y")
         time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
     except:
         time_str = created_at
     
-    # Tạo message
-    message = f"""{tweet_type}
+    # Tạo caption với header mới
+    caption = f"""🔔 <b>Tweet Mới từ KOL</b>
+
+{tweet_type}
 👤 {user_name} (@{user_screen_name})
 👥 Followers: {followers:,}
 
@@ -168,18 +249,16 @@ def format_tweet_message(tweet, media_list=None):
 """
     
     # Thêm link media nếu có
-    if media_list and len(media_list) > 0:
-        # Lấy link media đầu tiên (hoặc có thể gộp tất cả)
-        media_url = media_list[0]['url']
-        message += f"🔗 <a href=\"{media_url}\">Xem Media gốc</a>\n"
+    if media_url:
+        caption += f"🔗 <a href=\"{media_url}\">Xem Media gốc</a>\n"
     
     # Thêm link tweet
-    message += f"🔗 <a href=\"{tweet_url}\">Xem tweet gốc</a>\n"
+    caption += f"🔗 <a href=\"{tweet_url}\">Xem tweet gốc</a>\n"
     
     # Thêm thời gian
-    message += f"\n\n⏰ {time_str}"
+    caption += f"\n\n⏰ {time_str}"
     
-    return message
+    return caption
 
 def process_tweet(tweet):
     """Xử lý một tweet và gửi tới Telegram"""
@@ -196,12 +275,48 @@ def process_tweet(tweet):
     # Trích xuất media
     media_list = extract_media(tweet)
     
-    # Tạo message
-    message = format_tweet_message(tweet, media_list)
-    
-    # Gửi message tới Telegram
-    logger.info(f"📤 Gửi message tới Telegram...")
-    send_telegram_message(message)
+    # Gửi tới Telegram
+    if media_list and len(media_list) > 0:
+        logger.info(f"📎 Tweet có {len(media_list)} media, gửi kèm media...")
+        
+        # Gửi media đầu tiên kèm caption đầy đủ
+        first_media = media_list[0]
+        media_type = first_media['type']
+        media_url = first_media['url']
+        
+        # Tạo caption với link media
+        caption = format_tweet_caption(tweet, media_url)
+        
+        # Gửi media tương ứng
+        if media_type == 'photo':
+            logger.info(f"📸 Gửi ảnh kèm caption...")
+            send_telegram_photo(media_url, caption)
+        elif media_type == 'animated_gif':
+            logger.info(f"🎞️ Gửi GIF kèm caption...")
+            send_telegram_animation(media_url, caption)
+        elif media_type == 'video':
+            logger.info(f"🎬 Gửi video kèm caption...")
+            send_telegram_video(media_url, caption)
+        
+        # Gửi các media còn lại (nếu có) - không có caption
+        for idx in range(1, len(media_list)):
+            media = media_list[idx]
+            media_type = media['type']
+            media_url = media['url']
+            
+            logger.info(f"📎 Gửi media {idx + 1}/{len(media_list)}...")
+            
+            if media_type == 'photo':
+                send_telegram_photo(media_url)
+            elif media_type == 'animated_gif':
+                send_telegram_animation(media_url)
+            elif media_type == 'video':
+                send_telegram_video(media_url)
+    else:
+        # Không có media, chỉ gửi text
+        logger.info(f"📝 Tweet không có media, chỉ gửi text...")
+        message = format_tweet_caption(tweet, None)
+        send_telegram_message(message)
     
     logger.info(f"✅ Hoàn thành xử lý tweet")
 
@@ -285,7 +400,7 @@ def health_check():
         'status': 'healthy',
         'service': 'twitter-webhook-v3',
         'version': '3.0',
-        'features': ['photos', 'gifs', 'videos', 'simple_format']
+        'features': ['photos', 'gifs', 'videos', 'clean_text', 'kol_header']
     }), 200
 
 @app.route('/test', methods=['POST'])
@@ -296,12 +411,12 @@ def test_endpoint():
         
         # Test với tweet giả có media
         test_tweet = {
-            'id': '1234567890',
-            'text': data.get('text', '$OKAYGUY https://t.co/furkq7Zdd6'),
-            'url': 'https://x.com/test/status/1234567890',
-            'twitterUrl': 'https://twitter.com/test/status/1234567890',
-            'createdAt': 'Sat Nov 15 07:57:33 +0000 2025',
-            'isReply': False,
+            'id': '1989606425056948690',
+            'text': data.get('text', '@Neyro_0x https://t.co/tWUeTGiWX5'),
+            'url': 'https://x.com/Zenoxcallz/status/1989606425056948690',
+            'twitterUrl': 'https://twitter.com/Zenoxcallz/status/1989606425056948690',
+            'createdAt': 'Sat Nov 15 08:08:31 +0000 2025',
+            'isReply': True,
             'author': {
                 'name': 'Zenox 🌙',
                 'userName': 'Zenoxcallz',
@@ -310,8 +425,16 @@ def test_endpoint():
             'extendedEntities': {
                 'media': [
                     {
-                        'type': 'photo',
-                        'media_url_https': 'https://pbs.twimg.com/media/test.jpg'
+                        'type': 'animated_gif',
+                        'video_info': {
+                            'variants': [
+                                {
+                                    'bitrate': 0,
+                                    'content_type': 'video/mp4',
+                                    'url': 'https://video.twimg.com/tweet_video/G5yAfjfbcAAK3RN.mp4'
+                                }
+                            ]
+                        }
                     }
                 ]
             }
@@ -329,9 +452,10 @@ if __name__ == '__main__':
     logger.info("🚀 KHỞI ĐỘNG TWITTER WEBHOOK SERVER V3")
     logger.info("=" * 80)
     logger.info("📋 Tính năng:")
-    logger.info("  ✅ Format message đơn giản, gọn gàng")
-    logger.info("  ✅ Link 'Xem Media gốc' và 'Xem tweet gốc' riêng biệt")
-    logger.info("  ✅ Hỗ trợ ảnh, GIF, video")
+    logger.info("  ✅ Header '🔔 Tweet Mới từ KOL'")
+    logger.info("  ✅ Hiển thị media (ảnh/GIF/video) trong Telegram")
+    logger.info("  ✅ Tự động loại bỏ link t.co khỏi nội dung")
+    logger.info("  ✅ Kèm link 'Xem Media gốc' và 'Xem tweet gốc'")
     logger.info("  ✅ Tự động chọn video chất lượng cao nhất")
     logger.info("=" * 80 + "\n")
     

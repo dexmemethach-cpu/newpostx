@@ -33,6 +33,10 @@ def detect_community_post(tweet_data):
     }
     
     try:
+        # LOG TOÀN BỘ TWEET DATA ĐỂ DEBUG
+        logger.info(f"🔍 DEBUG - Tweet keys: {list(tweet_data.keys())}")
+        logger.info(f"🔍 DEBUG - Full tweet data: {json.dumps(tweet_data, indent=2, ensure_ascii=False)}")
+        
         # Kiểm tra trong tweet object trực tiếp
         if 'community_id' in tweet_data or 'communityId' in tweet_data:
             community_info['is_community'] = True
@@ -50,6 +54,7 @@ def detect_community_post(tweet_data):
         # Kiểm tra trong conversation_context
         if 'conversation_context' in tweet_data or 'conversationContext' in tweet_data:
             conv_context = tweet_data.get('conversation_context') or tweet_data.get('conversationContext')
+            logger.info(f"🔍 Found conversation_context: {json.dumps(conv_context, indent=2, ensure_ascii=False)}")
             if 'community' in conv_context:
                 community_info['is_community'] = True
                 community = conv_context['community']
@@ -60,6 +65,7 @@ def detect_community_post(tweet_data):
         # Kiểm tra trong context_annotations
         if 'context_annotations' in tweet_data or 'contextAnnotations' in tweet_data:
             annotations = tweet_data.get('context_annotations') or tweet_data.get('contextAnnotations', [])
+            logger.info(f"🔍 Found context_annotations: {json.dumps(annotations, indent=2, ensure_ascii=False)}")
             for annotation in annotations:
                 domain = annotation.get('domain', {})
                 if domain.get('name') == 'Community':
@@ -68,11 +74,26 @@ def detect_community_post(tweet_data):
                     community_info['community_name'] = entity.get('name')
                     logger.info(f"✅ Community post detected in context_annotations - Name: {entity.get('name')}")
         
+        # Kiểm tra các trường khác có thể chứa thông tin community
+        possible_community_fields = [
+            'communityNote', 'community_note', 'communityNotes', 'community_notes',
+            'communityData', 'community_data', 'communityInfo', 'community_info',
+            'card', 'cards', 'supplemental_language'
+        ]
+        
+        for field in possible_community_fields:
+            if field in tweet_data:
+                logger.info(f"🔍 Found potential community field '{field}': {json.dumps(tweet_data[field], indent=2, ensure_ascii=False)}")
+        
         if community_info['is_community']:
             logger.info(f"🏘️ Tweet từ Community: {community_info['community_name'] or community_info['community_id']}")
+        else:
+            logger.warning(f"⚠️ Không phát hiện được community trong tweet này")
         
     except Exception as e:
         logger.error(f"❌ Error detecting community post: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
     
     return community_info
 
@@ -492,8 +513,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'service': 'twitter-webhook-v3',
-        'version': '3.1',
-        'features': ['photos', 'gifs', 'videos', 'clean_text', 'kol_header', 'preserve_format', 'community_detection']
+        'version': '3.1-debug',
+        'features': ['photos', 'gifs', 'videos', 'clean_text', 'kol_header', 'preserve_format', 'community_detection', 'debug_logging']
     }), 200
 
 @app.route('/test', methods=['POST'])
@@ -531,7 +552,7 @@ def test_endpoint():
 
 if __name__ == '__main__':
     logger.info("\n" + "=" * 80)
-    logger.info("🚀 KHỞI ĐỘNG TWITTER WEBHOOK SERVER V3.1")
+    logger.info("🚀 KHỞI ĐỘNG TWITTER WEBHOOK SERVER V3.1-DEBUG")
     logger.info("=" * 80)
     logger.info("📋 Tính năng:")
     logger.info("  ✅ Header '🔔 Tweet Mới từ KOL'")
@@ -540,6 +561,7 @@ if __name__ == '__main__':
     logger.info("  ✅ Tự động loại bỏ link t.co khỏi nội dung")
     logger.info("  ✅ Kèm link 'Xem Media gốc' và 'Xem tweet gốc'")
     logger.info("  ✅ Nhận dạng và hiển thị Twitter Community posts")
+    logger.info("  🔍 DEBUG: Log chi tiết cấu trúc tweet data")
     logger.info("=" * 80 + "\n")
     
     app.run(host='0.0.0.0', port=5000, debug=True)

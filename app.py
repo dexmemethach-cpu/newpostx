@@ -1,297 +1,250 @@
 from flask import Flask, request, jsonify
 import requests
 import logging
-from datetime import datetime
+
+# Cấu hình logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Cấu hình logging chi tiết
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Cấu hình Telegram Bot
+TELEGRAM_BOT_TOKEN = "8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8"
+TELEGRAM_CHAT_ID = "-1003174496663"
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-# Cấu hình Telegram
-TELEGRAM_BOT_TOKEN = "8106631505:AAFq8iqagLhsCh8Vr_P0lpdMljGoyJmZOu8"  # Thay bằng token thật
-TELEGRAM_CHAT_ID = "-1003174496663"      # Thay bằng chat ID thật
+def extract_media(tweet_data):
+    """
+    Trích xuất thông tin media từ tweet (ảnh, GIF, video)
+    
+    Returns:
+        list: Danh sách các dict chứa {'type': 'photo'|'animated_gif'|'video', 'url': 'media_url'}
+    """
+    media_list = []
+    
+    # Kiểm tra extended_entities trước (ưu tiên hơn entities)
+    entities = tweet_data.get('extended_entities') or tweet_data.get('entities')
+    
+    if not entities or 'media' not in entities:
+        logger.info("Không tìm thấy media trong tweet")
+        return media_list
+    
+    for media in entities['media']:
+        media_type = media.get('type')
+        
+        if media_type == 'photo':
+            # Xử lý ảnh tĩnh
+            media_url = media.get('media_url_https')
+            if media_url:
+                media_list.append({
+                    'type': 'photo',
+                    'url': media_url
+                })
+                logger.info(f"Tìm thấy ảnh: {media_url}")
+        
+        elif media_type == 'animated_gif':
+            # Xử lý GIF (Twitter lưu dưới dạng MP4)
+            video_info = media.get('video_info', {})
+            variants = video_info.get('variants', [])
+            
+            # Lấy URL MP4 từ variants
+            for variant in variants:
+                if variant.get('content_type') == 'video/mp4':
+                    media_list.append({
+                        'type': 'animated_gif',
+                        'url': variant.get('url')
+                    })
+                    logger.info(f"Tìm thấy GIF: {variant.get('url')}")
+                    break
+        
+        elif media_type == 'video':
+            # Xử lý video - chọn variant có bitrate cao nhất
+            video_info = media.get('video_info', {})
+            variants = video_info.get('variants', [])
+            
+            # Lọc các variant MP4 và sắp xếp theo bitrate
+            mp4_variants = [v for v in variants if v.get('content_type') == 'video/mp4']
+            
+            if mp4_variants:
+                # Chọn video có bitrate cao nhất
+                best_variant = max(mp4_variants, key=lambda x: x.get('bitrate', 0))
+                media_list.append({
+                    'type': 'video',
+                    'url': best_variant.get('url')
+                })
+                logger.info(f"Tìm thấy video (bitrate: {best_variant.get('bitrate')}): {best_variant.get('url')}")
+    
+    return media_list
 
-def extract_media_urls(tweet):
-    """Trích xuất URL hình ảnh/video từ tweet"""
-    media_urls = []
+def send_telegram_photo(photo_url, caption=None):
+    """Gửi ảnh tới Telegram"""
+    url = f"{TELEGRAM_API_URL}/sendPhoto"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'photo': photo_url
+    }
+    if caption:
+        payload['caption'] = caption
     
     try:
-        # Kiểm tra extendedEntities trước (chứa media chất lượng cao)
-        extended_entities = tweet.get('extendedEntities', {})
-        if extended_entities and 'media' in extended_entities:
-            for media in extended_entities['media']:
-                if media.get('type') == 'photo':
-                    media_url = media.get('media_url_https') or media.get('url')
-                    if media_url:
-                        media_urls.append(media_url)
-                        logger.info(f"  📷 Tìm thấy ảnh: {media_url}")
-        
-        # Nếu không có trong extendedEntities, kiểm tra entities
-        if not media_urls:
-            entities = tweet.get('entities', {})
-            if entities and 'media' in entities:
-                for media in entities['media']:
-                    if media.get('type') == 'photo':
-                        media_url = media.get('media_url_https') or media.get('url')
-                        if media_url:
-                            media_urls.append(media_url)
-                            logger.info(f"  📷 Tìm thấy ảnh: {media_url}")
-        
-        logger.info(f"  📊 Tổng số ảnh tìm thấy: {len(media_urls)}")
-        
-    except Exception as e:
-        logger.error(f"❌ Lỗi khi trích xuất media: {str(e)}")
-    
-    return media_urls
-
-def send_telegram_photo(photo_url, caption):
-    """Gửi ảnh kèm caption đến Telegram"""
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "photo": photo_url,
-            "caption": caption,
-            "parse_mode": "HTML"
-        }
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload)
         response.raise_for_status()
-        logger.info(f"✅ Đã gửi ảnh Telegram thành công")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Lỗi khi gửi ảnh Telegram: {str(e)}")
-        return False
-
-def send_telegram_message(message):
-    """Gửi tin nhắn text đến Telegram"""
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": False
-        }
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        logger.info(f"✅ Đã gửi tin nhắn Telegram thành công")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Lỗi khi gửi Telegram: {str(e)}")
-        return False
-
-def extract_tweet_data(tweet):
-    """Trích xuất dữ liệu từ một tweet object"""
-    try:
-        # Lấy thông tin cơ bản
-        tweet_id = tweet.get('id', 'Unknown')
-        tweet_text = tweet.get('text', 'No text')
-        tweet_url = tweet.get('url', tweet.get('twitterUrl', 'No URL'))
-        is_reply = tweet.get('isReply', False)
-        
-        # Lấy thông tin tác giả
-        author = tweet.get('author', {})
-        author_name = author.get('name', 'Unknown')
-        author_username = author.get('userName', 'Unknown')
-        author_followers = author.get('followers', 0)
-        
-        # Trích xuất media URLs
-        media_urls = extract_media_urls(tweet)
-        
-        # Log chi tiết dữ liệu đã trích xuất
-        logger.info(f"📊 Dữ liệu trích xuất:")
-        logger.info(f"  - Tweet ID: {tweet_id}")
-        logger.info(f"  - Text: {tweet_text[:50]}...")
-        logger.info(f"  - Author: {author_name} (@{author_username})")
-        logger.info(f"  - Followers: {author_followers}")
-        logger.info(f"  - Is Reply: {is_reply}")
-        logger.info(f"  - URL: {tweet_url}")
-        logger.info(f"  - Media count: {len(media_urls)}")
-        
-        return {
-            'id': tweet_id,
-            'text': tweet_text,
-            'url': tweet_url,
-            'is_reply': is_reply,
-            'author_name': author_name,
-            'author_username': author_username,
-            'author_followers': author_followers,
-            'media_urls': media_urls
-        }
-    except Exception as e:
-        logger.error(f"❌ Lỗi khi trích xuất dữ liệu tweet: {str(e)}")
+        logger.info(f"✅ Đã gửi ảnh tới Telegram thành công")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Lỗi khi gửi ảnh tới Telegram: {e}")
         return None
 
-def format_telegram_caption(tweet_data):
-    """Định dạng caption cho ảnh Telegram"""
-    reply_indicator = "💬 Reply" if tweet_data['is_reply'] else "🐦 Tweet"
+def send_telegram_animation(animation_url, caption=None):
+    """Gửi GIF (animation) tới Telegram"""
+    url = f"{TELEGRAM_API_URL}/sendAnimation"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'animation': animation_url
+    }
+    if caption:
+        payload['caption'] = caption
     
-    # Loại bỏ t.co links khỏi text
-    text = tweet_data['text']
-    import re
-    text = re.sub(r'https://t\.co/\w+', '', text).strip()
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        logger.info(f"✅ Đã gửi GIF tới Telegram thành công")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Lỗi khi gửi GIF tới Telegram: {e}")
+        return None
+
+def send_telegram_video(video_url, caption=None):
+    """Gửi video tới Telegram"""
+    url = f"{TELEGRAM_API_URL}/sendVideo"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'video': video_url
+    }
+    if caption:
+        payload['caption'] = caption
     
-    caption = f"""🔔 <b>Tweet Mới từ X</b>
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        logger.info(f"✅ Đã gửi video tới Telegram thành công")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Lỗi khi gửi video tới Telegram: {e}")
+        return None
 
-{reply_indicator}
-👤 <b>{tweet_data['author_name']}</b> (@{tweet_data['author_username']})
-👥 Followers: {tweet_data['author_followers']:,}
-
-📝 <b>Nội dung:</b>
-{text}
-
-🔗 <a href="{tweet_data['url']}">Xem tweet gốc</a>
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+def send_telegram_message(text):
+    """Gửi tin nhắn text tới Telegram"""
+    url = f"{TELEGRAM_API_URL}/sendMessage"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': text,
+        'parse_mode': 'HTML'
+    }
     
-    return caption.strip()
-
-def format_telegram_message(tweet_data):
-    """Định dạng tin nhắn Telegram từ dữ liệu tweet (không có ảnh)"""
-    reply_indicator = "💬 Reply" if tweet_data['is_reply'] else "🐦 Tweet"
-    
-    message = f"""🔔 <b>Tweet Mới từ X</b>
-
-{reply_indicator}
-👤 <b>{tweet_data['author_name']}</b> (@{tweet_data['author_username']})
-👥 Followers: {tweet_data['author_followers']:,}
-
-📝 <b>Nội dung:</b>
-{tweet_data['text']}
-
-🔗 <a href="{tweet_data['url']}">Xem tweet gốc</a>
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
-    
-    return message.strip()
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        logger.info(f"✅ Đã gửi tin nhắn tới Telegram thành công")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Lỗi khi gửi tin nhắn tới Telegram: {e}")
+        return None
 
 @app.route('/webhook', methods=['POST'])
-def webhook():
-    """Endpoint nhận webhook từ X/Twitter"""
+def twitter_webhook():
+    """Xử lý webhook từ Twitter"""
     try:
-        # Lấy dữ liệu JSON từ request
-        payload = request.get_json()
+        data = request.json
+        logger.info(f"📨 Nhận được webhook từ Twitter")
         
-        logger.info("=" * 60)
-        logger.info("📥 Nhận webhook mới")
-        logger.info(f"📦 Payload đầy đủ: {payload}")
-        
-        # Kiểm tra xem có trường "tweets" không
-        if 'tweets' not in payload:
-            logger.warning("⚠️ Không tìm thấy trường 'tweets' trong payload")
-            return jsonify({
-                "status": "error",
-                "message": "Missing 'tweets' field in payload"
-            }), 400
-        
-        tweets_array = payload['tweets']
-        
-        # Kiểm tra xem tweets có phải là array và không rỗng
-        if not isinstance(tweets_array, list):
-            logger.warning("⚠️ Trường 'tweets' không phải là array")
-            return jsonify({
-                "status": "error",
-                "message": "'tweets' field is not an array"
-            }), 400
-        
-        if len(tweets_array) == 0:
-            logger.warning("⚠️ Array 'tweets' rỗng")
-            return jsonify({
-                "status": "success",
-                "message": "No tweets to process",
-                "processed": 0
-            }), 200
-        
-        logger.info(f"📊 Tìm thấy {len(tweets_array)} tweet(s) trong payload")
-        
-        # Xử lý từng tweet trong array
-        processed_count = 0
-        failed_count = 0
-        
-        for index, tweet in enumerate(tweets_array, 1):
-            logger.info(f"\n🔄 Xử lý tweet {index}/{len(tweets_array)}")
-            logger.info(f"📄 Tweet raw data: {tweet}")
-            
-            # Trích xuất dữ liệu từ tweet
-            tweet_data = extract_tweet_data(tweet)
-            
-            if tweet_data is None:
-                logger.error(f"❌ Không thể trích xuất dữ liệu từ tweet {index}")
-                failed_count += 1
-                continue
-            
-            # Kiểm tra xem có ảnh không
-            if tweet_data['media_urls']:
-                # Có ảnh - gửi ảnh kèm caption
-                logger.info(f"📸 Tweet có {len(tweet_data['media_urls'])} ảnh")
-                caption = format_telegram_caption(tweet_data)
+        # Kiểm tra xem có phải là tweet mới không
+        if 'tweet_create_events' in data:
+            for tweet in data['tweet_create_events']:
+                # Lấy thông tin tweet
+                tweet_id = tweet.get('id_str')
+                tweet_text = tweet.get('text', '')
+                user_name = tweet.get('user', {}).get('name', 'Unknown')
+                user_screen_name = tweet.get('user', {}).get('screen_name', 'unknown')
                 
-                # Gửi ảnh đầu tiên (Telegram hỗ trợ tốt nhất với 1 ảnh)
-                first_photo = tweet_data['media_urls'][0]
-                logger.info(f"📤 Gửi ảnh với caption:\n{caption}")
+                logger.info(f"🐦 Tweet mới từ @{user_screen_name}: {tweet_text[:50]}...")
                 
-                if send_telegram_photo(first_photo, caption):
-                    processed_count += 1
-                    logger.info(f"✅ Đã xử lý thành công tweet {index} (có ảnh)")
+                # Trích xuất media
+                media_list = extract_media(tweet)
+                
+                # Tạo caption cho media
+                caption = f"🐦 <b>{user_name}</b> (@{user_screen_name})\n\n{tweet_text}\n\n🔗 https://twitter.com/{user_screen_name}/status/{tweet_id}"
+                
+                # Giới hạn caption (Telegram có giới hạn 1024 ký tự cho caption)
+                if len(caption) > 1024:
+                    caption = caption[:1020] + "..."
+                
+                # Gửi media tới Telegram
+                if media_list:
+                    logger.info(f"📎 Tìm thấy {len(media_list)} media item(s)")
+                    
+                    for idx, media in enumerate(media_list):
+                        media_type = media['type']
+                        media_url = media['url']
+                        
+                        # Chỉ gửi caption cho media đầu tiên
+                        current_caption = caption if idx == 0 else None
+                        
+                        if media_type == 'photo':
+                            logger.info(f"📸 Đang gửi ảnh {idx + 1}/{len(media_list)}...")
+                            send_telegram_photo(media_url, current_caption)
+                        
+                        elif media_type == 'animated_gif':
+                            logger.info(f"🎞️ Đang gửi GIF {idx + 1}/{len(media_list)}...")
+                            send_telegram_animation(media_url, current_caption)
+                        
+                        elif media_type == 'video':
+                            logger.info(f"🎬 Đang gửi video {idx + 1}/{len(media_list)}...")
+                            send_telegram_video(media_url, current_caption)
                 else:
-                    # Nếu gửi ảnh thất bại, thử gửi text
-                    logger.warning(f"⚠️ Gửi ảnh thất bại, thử gửi text...")
-                    message = format_telegram_message(tweet_data)
-                    if send_telegram_message(message):
-                        processed_count += 1
-                    else:
-                        failed_count += 1
-            else:
-                # Không có ảnh - gửi text thông thường
-                logger.info(f"📝 Tweet không có ảnh")
-                message = format_telegram_message(tweet_data)
-                logger.info(f"📤 Tin nhắn Telegram sẽ gửi:\n{message}")
-                
-                if send_telegram_message(message):
-                    processed_count += 1
-                    logger.info(f"✅ Đã xử lý thành công tweet {index}")
-                else:
-                    failed_count += 1
-                    logger.error(f"❌ Không thể gửi Telegram cho tweet {index}")
+                    # Nếu không có media, chỉ gửi text
+                    logger.info("📝 Không có media, gửi tin nhắn text")
+                    send_telegram_message(caption)
         
-        # Tổng kết
-        logger.info("=" * 60)
-        logger.info(f"📊 KẾT QUẢ XỬ LÝ:")
-        logger.info(f"  - Tổng số tweets: {len(tweets_array)}")
-        logger.info(f"  - Thành công: {processed_count}")
-        logger.info(f"  - Thất bại: {failed_count}")
-        logger.info("=" * 60)
-        
-        return jsonify({
-            "status": "success",
-            "message": f"Processed {processed_count} tweet(s)",
-            "total": len(tweets_array),
-            "processed": processed_count,
-            "failed": failed_count
-        }), 200
-        
+        return jsonify({'status': 'success'}), 200
+    
     except Exception as e:
-        logger.error(f"❌ LỖI NGHIÊM TRỌNG: {str(e)}", exc_info=True)
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+        logger.error(f"❌ Lỗi xử lý webhook: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/webhook', methods=['GET'])
+def twitter_webhook_challenge():
+    """Xử lý CRC challenge từ Twitter"""
+    crc_token = request.args.get('crc_token')
+    if crc_token:
+        # Twitter yêu cầu response với sha256 hash
+        import hmac
+        import hashlib
+        import base64
+        
+        # Consumer Secret của Twitter App (cần thay thế bằng giá trị thực)
+        CONSUMER_SECRET = "YOUR_TWITTER_CONSUMER_SECRET"
+        
+        sha256_hash_digest = hmac.new(
+            CONSUMER_SECRET.encode(),
+            msg=crc_token.encode(),
+            digestmod=hashlib.sha256
+        ).digest()
+        
+        response = {
+            'response_token': 'sha256=' + base64.b64encode(sha256_hash_digest).decode()
+        }
+        
+        logger.info("✅ CRC challenge thành công")
+        return jsonify(response), 200
+    
+    return jsonify({'error': 'No crc_token provided'}), 400
 
 @app.route('/health', methods=['GET'])
-def health():
-    """Endpoint kiểm tra health"""
-    return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat()
-    }), 200
+def health_check():
+    """Health check endpoint"""
+    return jsonify({'status': 'healthy', 'service': 'twitter-webhook-v3'}), 200
 
 if __name__ == '__main__':
-    logger.info("🚀 Khởi động Twitter Webhook Server (Fixed v3 - With Images)")
-    logger.info("📡 Endpoint: /webhook (POST)")
-    logger.info("🏥 Health check: /health (GET)")
+    logger.info("🚀 Khởi động Twitter Webhook Server v3 (hỗ trợ Ảnh, GIF, Video)")
     app.run(host='0.0.0.0', port=5000, debug=True)
